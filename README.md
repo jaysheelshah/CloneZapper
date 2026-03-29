@@ -84,7 +84,7 @@ java -jar target/clonezapper.jar scan --path ~/Documents --gdrive --onedrive
 
 ## Project Status
 
-CloneZapper is in active early development. See [PROJECT_MANAGER.md](PROJECT_MANAGER.md) for the current milestone and task progress.
+CloneZapper is in active early development. See [PROJECT_MANAGER.md](docs/PROJECT_MANAGER.md) for the current milestone and task progress.
 
 ---
 
