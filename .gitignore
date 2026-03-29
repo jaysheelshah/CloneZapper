@@ -24,7 +24,6 @@ buildNumber.properties
 *.iml
 *.iws
 *.ipr
-out/
 # Eclipse
 .classpath
 .project
