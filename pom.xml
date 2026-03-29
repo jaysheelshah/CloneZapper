@@ -64,6 +64,13 @@
             <version>${sqlite.version}</version>
         </dependency>
 
+        <!-- Live reload (Vaadin hot-swap in dev mode) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-devtools</artifactId>
+            <optional>true</optional>
+        </dependency>
+
         <!-- Testing -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
