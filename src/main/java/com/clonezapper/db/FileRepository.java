@@ -70,6 +70,13 @@ public class FileRepository {
             scanId, minGroupSize);
     }
 
+    /** All files in a scan with a given size — used by CandidateStage for partial-hash grouping. */
+    public List<ScannedFile> findByScanIdAndSize(long scanId, long size) {
+        return jdbc.query(
+            "SELECT * FROM files WHERE scan_id = ? AND size = ?",
+            rowMapper(), scanId, size);
+    }
+
     public long countByScanId(long scanId) {
         Long count = jdbc.queryForObject("SELECT COUNT(*) FROM files WHERE scan_id = ?", Long.class, scanId);
         return count != null ? count : 0L;
