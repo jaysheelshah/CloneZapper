@@ -36,10 +36,12 @@ public class MainLayout extends AppLayout {
         appTitle.addClassNames(LumoUtility.FontWeight.SEMIBOLD, LumoUtility.FontSize.MEDIUM);
 
         SideNav nav = new SideNav();
-        nav.addItem(new SideNavItem("Dashboard",  DashboardView.class,   VaadinIcon.HOME.create()));
-        nav.addItem(new SideNavItem("Scan",        ScanView.class,        VaadinIcon.SEARCH.create()));
-        nav.addItem(new SideNavItem("Results",     ResultsView.class,     VaadinIcon.LIST.create()));
-        nav.addItem(new SideNavItem("Review Queue",ReviewQueueView.class, VaadinIcon.QUESTION_CIRCLE.create()));
+        nav.addItem(new SideNavItem("Dashboard",    DashboardView.class,   VaadinIcon.HOME.create()));
+        nav.addItem(new SideNavItem("Scan",          ScanView.class,        VaadinIcon.SEARCH.create()));
+        nav.addItem(new SideNavItem("Results",       ResultsView.class,     VaadinIcon.LIST.create()));
+        nav.addItem(new SideNavItem("Review Queue",  ReviewQueueView.class, VaadinIcon.QUESTION_CIRCLE.create()));
+        nav.addItem(new SideNavItem("History",       HistoryView.class,     VaadinIcon.CLOCK.create()));
+        nav.addItem(new SideNavItem("Settings",      SettingsView.class,    VaadinIcon.COG.create()));
 
         Scroller scroller = new Scroller(nav);
         addToDrawer(appTitle, scroller);

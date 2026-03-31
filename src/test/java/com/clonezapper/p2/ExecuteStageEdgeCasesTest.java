@@ -83,7 +83,10 @@ class ExecuteStageEdgeCasesTest extends BaseTest {
         Path runArchive = Path.of(archiveRoot, "run_" + run.getId());
         long archivedCount;
         try (var stream = Files.walk(runArchive)) {
-            archivedCount = stream.filter(Files::isRegularFile).count();
+            archivedCount = stream
+                .filter(Files::isRegularFile)
+                .filter(p -> !p.getFileName().toString().startsWith("_clonezapper_report"))
+                .count();
         }
         assertThat(archivedCount).isEqualTo(2);
     }

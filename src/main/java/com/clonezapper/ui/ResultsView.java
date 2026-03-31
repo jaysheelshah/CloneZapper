@@ -21,48 +21,101 @@ import com.vaadin.flow.component.notification.Notification;
 import com.vaadin.flow.component.notification.NotificationVariant;
 import com.vaadin.flow.component.orderedlayout.HorizontalLayout;
 import com.vaadin.flow.component.orderedlayout.VerticalLayout;
+import com.vaadin.flow.component.select.Select;
+import com.vaadin.flow.router.BeforeEnterEvent;
+import com.vaadin.flow.router.BeforeEnterObserver;
 import com.vaadin.flow.router.PageTitle;
 import com.vaadin.flow.router.Route;
+import com.vaadin.flow.router.RouteParameters;
 import com.vaadin.flow.theme.lumo.LumoUtility;
 import org.springframework.beans.factory.annotation.Value;
 
 import java.util.List;
 import java.util.Optional;
 
-@Route(value = "results", layout = MainLayout.class)
+@Route(value = "results/:runId?", layout = MainLayout.class)
 @PageTitle("Results — CloneZapper")
-public class ResultsView extends VerticalLayout {
+public class ResultsView extends VerticalLayout implements BeforeEnterObserver {
+
+    private final ScanRepository scanRepository;
+    private final DuplicateGroupRepository groupRepository;
+    private final FileRepository fileRepository;
+    private final ExecuteStage executeStage;
+    private final String archiveRoot;
+
+    private final VerticalLayout content = new VerticalLayout();
 
     public ResultsView(ScanRepository scanRepository,
                        DuplicateGroupRepository groupRepository,
                        FileRepository fileRepository,
                        ExecuteStage executeStage,
                        @Value("${clonezapper.archive.root}") String archiveRoot) {
+        this.scanRepository = scanRepository;
+        this.groupRepository = groupRepository;
+        this.fileRepository = fileRepository;
+        this.executeStage = executeStage;
+        this.archiveRoot = archiveRoot;
+
         setSpacing(true);
         setPadding(true);
+        content.setSpacing(true);
+        content.setPadding(false);
+        add(new H2("Scan Results"), buildRunSelector(), content);
+    }
 
-        add(new H2("Scan Results"));
+    @Override
+    public void beforeEnter(BeforeEnterEvent event) {
+        String runIdParam = event.getRouteParameters().get("runId").orElse(null);
+        ScanRun run;
+        if (runIdParam != null) {
+            run = scanRepository.findById(Long.parseLong(runIdParam)).orElse(null);
+        } else {
+            run = scanRepository.findLatest().orElse(null);
+        }
+        buildContent(run);
+    }
 
-        Optional<ScanRun> latest = scanRepository.findLatest();
-        if (latest.isEmpty()) {
+    // ── Run selector ─────────────────────────────────────────────────────────
+
+    private Select<ScanRun> buildRunSelector() {
+        Select<ScanRun> select = new Select<>();
+        select.setLabel("Scan run");
+        select.setItemLabelGenerator(r -> r.getRunLabel() + "  [" + r.getPhase() + "]");
+        List<ScanRun> runs = scanRepository.findAll();
+        select.setItems(runs);
+        if (!runs.isEmpty()) select.setValue(runs.getFirst());
+        select.addValueChangeListener(e -> {
+            if (e.getValue() != null) {
+                UI.getCurrent().navigate(ResultsView.class,
+                    new RouteParameters("runId", String.valueOf(e.getValue().getId())));
+            }
+        });
+        return select;
+    }
+
+    // ── Content builder ───────────────────────────────────────────────────────
+
+    private void buildContent(ScanRun run) {
+        content.removeAll();
+
+        if (run == null) {
             Paragraph msg = new Paragraph("No scan results yet. Run a scan first.");
             msg.addClassNames(LumoUtility.TextColor.SECONDARY);
-            add(msg);
+            content.add(msg);
             return;
         }
 
-        ScanRun run = latest.get();
         Paragraph info = new Paragraph(
             "Run: " + run.getRunLabel() + "  |  Phase: " + run.getPhase());
         info.addClassNames(LumoUtility.TextColor.SECONDARY);
-        add(info);
+        content.add(info);
 
         List<DuplicateGroup> groups = groupRepository.findByScanId(run.getId());
 
         if (groups.isEmpty()) {
             Paragraph none = new Paragraph("No duplicate groups found in this scan.");
             none.addClassNames(LumoUtility.TextColor.SECONDARY);
-            add(none);
+            content.add(none);
             return;
         }
 
@@ -105,16 +158,15 @@ public class ResultsView extends VerticalLayout {
             dialog.open();
         });
 
-        add(new HorizontalLayout(summary, stageButton));
+        content.add(new HorizontalLayout(summary, stageButton));
 
         // ── Group list ───────────────────────────────────────────────────────
         for (int i = 0; i < groups.size(); i++) {
-            add(buildGroupSection(i + 1, groups.get(i), fileRepository));
+            content.add(buildGroupSection(i + 1, groups.get(i)));
         }
     }
 
-    private VerticalLayout buildGroupSection(int index, DuplicateGroup group,
-                                             FileRepository fileRepository) {
+    private VerticalLayout buildGroupSection(int index, DuplicateGroup group) {
         VerticalLayout section = new VerticalLayout();
         section.setSpacing(false);
         section.setPadding(false);

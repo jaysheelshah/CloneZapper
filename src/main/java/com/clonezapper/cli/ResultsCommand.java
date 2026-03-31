@@ -21,6 +21,9 @@ public class ResultsCommand implements Runnable {
     @Option(names = {"--run-id"}, description = "Specific run ID (defaults to latest)")
     private Long runId;
 
+    @Option(names = {"--output", "-o"}, description = "Output format: text, json, csv (default: text)", defaultValue = "text")
+    private String outputFormat;
+
     private final ScanRepository scanRepository;
     private final DuplicateGroupRepository groupRepository;
     private final FileRepository fileRepository;
@@ -46,19 +49,24 @@ public class ResultsCommand implements Runnable {
         ScanRun run = runOpt.get();
         List<DuplicateGroup> groups = groupRepository.findByScanId(run.getId());
 
+        switch (outputFormat.toLowerCase()) {
+            case "json"  -> outputJson(run, groups);
+            case "csv"   -> outputCsv(run, groups);
+            default      -> outputText(run, groups);
+        }
+    }
+
+    private void outputText(ScanRun run, List<DuplicateGroup> groups) {
         System.out.printf("%nRun %-6d  %s  [%s]%n", run.getId(), run.getRunLabel(), run.getPhase());
         System.out.println("─".repeat(72));
-
         if (groups.isEmpty()) {
             System.out.println("  No duplicate groups found.");
             return;
         }
-
         for (int i = 0; i < groups.size(); i++) {
             DuplicateGroup g = groups.get(i);
             System.out.printf("  Group %-3d  strategy=%-12s  confidence=%.0f%%%n",
                 i + 1, g.getStrategy(), g.getConfidence() * 100);
-
             for (DuplicateMember m : g.getMembers()) {
                 ScannedFile f = fileRepository.findById(m.getFileId()).orElse(null);
                 if (f == null) continue;
@@ -68,6 +76,55 @@ public class ResultsCommand implements Runnable {
             System.out.println();
         }
         System.out.printf("  %d group(s) found.%n", groups.size());
+    }
+
+    private void outputJson(ScanRun run, List<DuplicateGroup> groups) {
+        System.out.println("{");
+        System.out.printf("  \"runId\": %d,%n", run.getId());
+        System.out.printf("  \"runLabel\": \"%s\",%n", run.getRunLabel());
+        System.out.printf("  \"phase\": \"%s\",%n", run.getPhase());
+        System.out.printf("  \"groupCount\": %d,%n", groups.size());
+        System.out.println("  \"groups\": [");
+        for (int i = 0; i < groups.size(); i++) {
+            DuplicateGroup g = groups.get(i);
+            System.out.println("    {");
+            System.out.printf("      \"strategy\": \"%s\",%n", g.getStrategy());
+            System.out.printf("      \"confidence\": %.4f,%n", g.getConfidence());
+            System.out.println("      \"files\": [");
+            List<DuplicateMember> members = g.getMembers();
+            for (int j = 0; j < members.size(); j++) {
+                ScannedFile f = fileRepository.findById(members.get(j).getFileId()).orElse(null);
+                if (f == null) continue;
+                boolean isCanonical = f.getId().equals(g.getCanonicalFileId());
+                System.out.printf("        {\"role\": \"%s\", \"path\": \"%s\", \"size\": %d}%s%n",
+                    isCanonical ? "canonical" : "duplicate",
+                    f.getPath().replace("\\", "\\\\"),
+                    f.getSize(),
+                    j < members.size() - 1 ? "," : "");
+            }
+            System.out.println("      ]");
+            System.out.print("    }");
+            System.out.println(i < groups.size() - 1 ? "," : "");
+        }
+        System.out.println("  ]");
+        System.out.println("}");
+    }
+
+    private void outputCsv(ScanRun run, List<DuplicateGroup> groups) {
+        System.out.println("RunId,RunLabel,GroupIndex,Strategy,Confidence,Role,Path,Size");
+        for (int i = 0; i < groups.size(); i++) {
+            DuplicateGroup g = groups.get(i);
+            for (DuplicateMember m : g.getMembers()) {
+                ScannedFile f = fileRepository.findById(m.getFileId()).orElse(null);
+                if (f == null) continue;
+                String role = f.getId().equals(g.getCanonicalFileId()) ? "canonical" : "duplicate";
+                System.out.printf("%d,\"%s\",%d,\"%s\",%.4f,\"%s\",\"%s\",%d%n",
+                    run.getId(), run.getRunLabel(), i + 1, g.getStrategy(),
+                    g.getConfidence(), role,
+                    f.getPath().replace("\"", "\"\""),
+                    f.getSize());
+            }
+        }
     }
 
     private String formatBytes(long bytes) {

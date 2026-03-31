@@ -5,6 +5,7 @@ import com.clonezapper.db.FileRepository;
 import com.clonezapper.db.ScanRepository;
 import com.clonezapper.engine.pipeline.ClusterStage;
 import com.clonezapper.model.DuplicateGroup;
+import com.clonezapper.service.ScanSettings;
 import com.clonezapper.model.DuplicateMember;
 import com.clonezapper.model.ScannedFile;
 import com.clonezapper.model.ScanRun;
@@ -38,7 +39,8 @@ public class ReviewQueueView extends VerticalLayout {
 
     public ReviewQueueView(ScanRepository scanRepository,
                            DuplicateGroupRepository groupRepository,
-                           FileRepository fileRepository) {
+                           FileRepository fileRepository,
+                           ScanSettings scanSettings) {
         setSpacing(true);
         setPadding(true);
 
@@ -52,7 +54,7 @@ public class ReviewQueueView extends VerticalLayout {
 
         ScanRun run = latest.get();
         List<DuplicateGroup> groups = groupRepository.findReviewQueueByScanId(
-            run.getId(), ClusterStage.DEFAULT_CONFIDENCE_THRESHOLD);
+            run.getId(), scanSettings.getConfidenceThreshold());
 
         Paragraph info = new Paragraph(
             "Run: " + run.getRunLabel() + "  |  Phase: " + run.getPhase());

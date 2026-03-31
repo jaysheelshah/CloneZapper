@@ -13,6 +13,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -34,6 +35,7 @@ import java.util.function.Consumer;
 public class UnifiedScanner {
 
     private static final Logger log = LoggerFactory.getLogger(UnifiedScanner.class);
+    private static final DateTimeFormatter RUN_LABEL_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss");
 
     private final ScanRepository scanRepository;
     private final ScanStage scanStage;
@@ -72,7 +74,7 @@ public class UnifiedScanner {
         ScanRun run = new ScanRun();
         run.setPhase("SCANNING");
         run.setCreatedAt(LocalDateTime.now());
-        run.setRunLabel("run_" + System.currentTimeMillis());
+        run.setRunLabel("run_" + LocalDateTime.now().format(RUN_LABEL_FORMAT));
         scanRepository.save(run);
 
         log.info("Starting scan run {} over {} path(s)", run.getId(), rootPaths.size());

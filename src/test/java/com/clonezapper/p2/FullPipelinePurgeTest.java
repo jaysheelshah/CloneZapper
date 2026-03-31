@@ -47,7 +47,10 @@ class FullPipelinePurgeTest extends BaseTest {
         // Verify something is in the archive before purge
         long archivedFiles;
         try (var stream = Files.walk(archiveDir)) {
-            archivedFiles = stream.filter(Files::isRegularFile).count();
+            archivedFiles = stream
+                .filter(Files::isRegularFile)
+                .filter(p -> !p.getFileName().toString().startsWith("_clonezapper_report"))
+                .count();
         }
         assertThat(archivedFiles).isEqualTo(1);
 

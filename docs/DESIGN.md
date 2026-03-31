@@ -271,6 +271,20 @@ For non-technical users. Runs on an embedded Spring Boot server (`localhost:8080
 
 ---
 
+## Development Focus
+
+**Text document deduplication is the current priority. All other media types (images, audio, video) are deferred until text handling is mature and complete.**
+
+| Handler | Status | Notes |
+|---------|--------|-------|
+| `DocumentHandler` | ✅ Active | PDF, DOCX, PPTX, XLSX via Apache Tika + MinHash LSH — primary focus |
+| `GenericHandler` | ✅ Active | Fallback exact-hash (BLAKE3) for all file types |
+| `ImageHandler` | ⏸ Low priority | dHash/pHash perceptual hashing is implemented but not a current focus — will be revisited once document dedup is fully mature |
+| Audio handler | ❌ Not implemented — low priority | Planned but deferred; requires perceptual audio fingerprinting (e.g. Chromaprint) |
+| Video handler | ❌ Not implemented — low priority | Planned but deferred; requires frame-level perceptual hashing |
+
+---
+
 ## Plugin Architecture
 
 File-type handling is dispatched via a `HandlerRegistry` loaded through Java `ServiceLoader`. Adding a new format requires only a new `FileTypeHandler` implementation — no changes to the pipeline.

@@ -5,6 +5,7 @@ import com.clonezapper.db.FileRepository;
 import com.clonezapper.model.DuplicateGroup;
 import com.clonezapper.model.DuplicateMember;
 import com.clonezapper.model.ScannedFile;
+import com.clonezapper.service.ScanSettings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -33,10 +34,14 @@ public class ClusterStage {
 
     private final DuplicateGroupRepository groupRepository;
     private final FileRepository fileRepository;
+    private final ScanSettings scanSettings;
 
-    public ClusterStage(DuplicateGroupRepository groupRepository, FileRepository fileRepository) {
+    public ClusterStage(DuplicateGroupRepository groupRepository,
+                        FileRepository fileRepository,
+                        ScanSettings scanSettings) {
         this.groupRepository = groupRepository;
         this.fileRepository = fileRepository;
+        this.scanSettings = scanSettings;
     }
 
     /**
@@ -104,7 +109,7 @@ public class ClusterStage {
             }
             group.setMembers(members);
 
-            if (confidence >= DEFAULT_CONFIDENCE_THRESHOLD) {
+            if (confidence >= scanSettings.getConfidenceThreshold()) {
                 autoQueue.add(group);
             } else {
                 reviewQueue.add(group);

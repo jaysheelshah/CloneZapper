@@ -59,7 +59,10 @@ class FullPipelineWithStagingTest extends BaseTest {
         // Archive directory is non-empty
         long archivedCount;
         try (var stream = Files.walk(archiveDir)) {
-            archivedCount = stream.filter(Files::isRegularFile).count();
+            archivedCount = stream
+                .filter(Files::isRegularFile)
+                .filter(p -> !p.getFileName().toString().startsWith("_clonezapper_report"))
+                .count();
         }
         assertThat(archivedCount).isEqualTo(1);
     }
