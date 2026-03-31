@@ -11,6 +11,7 @@ import java.sql.PreparedStatement;
 import java.sql.Statement;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 
 @Repository
@@ -38,12 +39,16 @@ public class ScanRepository {
             ps.setString(7, run.getRunLabel());
             return ps;
         }, keys);
-        run.setId(keys.getKey().longValue());
+        run.setId(Objects.requireNonNull(keys.getKey(), "no generated key").longValue());
         return run;
     }
 
     public void updatePhase(long id, String phase) {
         jdbc.update("UPDATE scans SET phase = ? WHERE id = ?", phase, id);
+    }
+
+    public void updateArchiveRoot(long id, String archiveRoot) {
+        jdbc.update("UPDATE scans SET archive_root = ? WHERE id = ?", archiveRoot, id);
     }
 
     public void markCompleted(long id) {
@@ -54,7 +59,7 @@ public class ScanRepository {
     public Optional<ScanRun> findById(long id) {
         List<ScanRun> results = jdbc.query(
             "SELECT * FROM scans WHERE id = ?", rowMapper(), id);
-        return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
+        return results.isEmpty() ? Optional.empty() : Optional.of(results.getFirst());
     }
 
     public List<ScanRun> findAll() {
@@ -64,7 +69,7 @@ public class ScanRepository {
     public Optional<ScanRun> findLatest() {
         List<ScanRun> results = jdbc.query(
             "SELECT * FROM scans ORDER BY created_at DESC LIMIT 1", rowMapper());
-        return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
+        return results.isEmpty() ? Optional.empty() : Optional.of(results.getFirst());
     }
 
     public long countAll() {

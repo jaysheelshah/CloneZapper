@@ -7,19 +7,31 @@ import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.button.ButtonVariant;
 import com.vaadin.flow.component.html.H2;
 import com.vaadin.flow.component.html.Paragraph;
+import com.vaadin.flow.component.html.Span;
 import com.vaadin.flow.component.notification.Notification;
 import com.vaadin.flow.component.notification.NotificationVariant;
 import com.vaadin.flow.component.orderedlayout.VerticalLayout;
+import com.vaadin.flow.component.progressbar.ProgressBar;
 import com.vaadin.flow.component.textfield.TextArea;
 import com.vaadin.flow.router.PageTitle;
 import com.vaadin.flow.router.Route;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
 @Route(value = "scan", layout = MainLayout.class)
 @PageTitle("Scan — CloneZapper")
 public class ScanView extends VerticalLayout {
+
+    private static final Map<String, Double> PHASE_PROGRESS = Map.of(
+        "SCANNING",   0.2,
+        "CANDIDATES", 0.4,
+        "COMPARING",  0.6,
+        "CLUSTERING", 0.8,
+        "COMPLETE",   1.0,
+        "FAILED",     0.0
+    );
 
     public ScanView(UnifiedScanner scanner) {
         setSpacing(true);
@@ -33,7 +45,17 @@ public class ScanView extends VerticalLayout {
         pathsField.setWidthFull();
         pathsField.setMinHeight("120px");
 
-        Button startButton = new Button("Scan", event -> {
+        ProgressBar progressBar = new ProgressBar();
+        progressBar.setVisible(false);
+        progressBar.setWidthFull();
+
+        Span phaseLabel = new Span();
+        phaseLabel.setVisible(false);
+
+        Button startButton = new Button("Scan");
+        startButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+
+        startButton.addClickListener(event -> {
             String raw = pathsField.getValue().trim();
             if (raw.isBlank()) {
                 Notification.show("Please enter at least one path.", 3000, Notification.Position.MIDDLE);
@@ -44,24 +66,55 @@ public class ScanView extends VerticalLayout {
                 .filter(s -> !s.isBlank())
                 .toList();
 
-            startButton(event.getSource()).setEnabled(false);
-            Notification.show("Scan started for " + paths.size() + " path(s)...", 3000, Notification.Position.BOTTOM_START);
+            startButton.setEnabled(false);
+            pathsField.setEnabled(false);
+            progressBar.setValue(0);
+            progressBar.setVisible(true);
+            phaseLabel.setText("Starting…");
+            phaseLabel.setVisible(true);
 
-            // Run scan (blocking for now — TODO: push to background thread + progress bar)
-            ScanRun run = scanner.startScan(paths);
+            UI ui = UI.getCurrent();
 
-            Notification ok = new Notification("Scan complete! Run ID: " + run.getId(), 4000, Notification.Position.BOTTOM_START);
-            ok.addThemeVariants(NotificationVariant.LUMO_SUCCESS);
-            ok.open();
+            Thread scanThread = new Thread(() -> {
+                try {
+                    ScanRun run = scanner.startScan(paths, phase -> {
+                        double progress = PHASE_PROGRESS.getOrDefault(phase, 0.0);
+                        ui.access(() -> {
+                            progressBar.setValue(progress);
+                            phaseLabel.setText(phase);
+                        });
+                    });
 
-            UI.getCurrent().navigate(DashboardView.class);
+                    ui.access(() -> {
+                        progressBar.setVisible(false);
+                        phaseLabel.setVisible(false);
+                        pathsField.setEnabled(true);
+                        startButton.setEnabled(true);
+
+                        Notification ok = new Notification(
+                            "Scan complete! Run ID: " + run.getId(),
+                            4000, Notification.Position.BOTTOM_START);
+                        ok.addThemeVariants(NotificationVariant.LUMO_SUCCESS);
+                        ok.open();
+                        UI.getCurrent().navigate(DashboardView.class);
+                    });
+
+                } catch (Exception e) {
+                    ui.access(() -> {
+                        progressBar.setVisible(false);
+                        phaseLabel.setVisible(false);
+                        pathsField.setEnabled(true);
+                        startButton.setEnabled(true);
+                        Notification.show("Scan failed: " + e.getMessage(),
+                            5000, Notification.Position.MIDDLE);
+                    });
+                }
+            });
+            scanThread.setDaemon(true);
+            scanThread.setName("clonezapper-scan");
+            scanThread.start();
         });
-        startButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
 
-        add(pathsField, startButton);
-    }
-
-    private Button startButton(com.vaadin.flow.component.Component source) {
-        return (Button) source;
+        add(pathsField, startButton, progressBar, phaseLabel);
     }
 }

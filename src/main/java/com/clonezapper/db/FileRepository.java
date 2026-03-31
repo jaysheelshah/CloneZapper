@@ -12,6 +12,7 @@ import java.sql.Statement;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 
 @Repository
@@ -42,25 +43,18 @@ public class FileRepository {
             ps.setString(10, file.getCopyHint());
             return ps;
         }, keys);
-        file.setId(keys.getKey().longValue());
+        file.setId(Objects.requireNonNull(keys.getKey(), "no generated key").longValue());
         return file;
     }
 
     public Optional<ScannedFile> findById(long id) {
         List<ScannedFile> results = jdbc.query(
             "SELECT * FROM files WHERE id = ?", rowMapper(), id);
-        return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
+        return results.isEmpty() ? Optional.empty() : Optional.of(results.getFirst());
     }
 
     public List<ScannedFile> findByScanId(long scanId) {
         return jdbc.query("SELECT * FROM files WHERE scan_id = ?", rowMapper(), scanId);
-    }
-
-    /** Files in the same scan that share the same partial hash — candidate duplicates. */
-    public List<ScannedFile> findByHashPartial(long scanId, String hashPartial) {
-        return jdbc.query(
-            "SELECT * FROM files WHERE scan_id = ? AND hash_partial = ?",
-            rowMapper(), scanId, hashPartial);
     }
 
     /** Files in the same scan grouped by size — first filter pass. */
@@ -77,14 +71,47 @@ public class FileRepository {
             rowMapper(), scanId, size);
     }
 
+    /**
+     * Most recent scan record for a given absolute path — used by ScanStage for incremental
+     * scanning (reuse existing fingerprints when size + modified_at are unchanged).
+     */
+    public Optional<ScannedFile> findLatestByPath(String path) {
+        List<ScannedFile> results = jdbc.query(
+            "SELECT * FROM files WHERE path = ? ORDER BY id DESC LIMIT 1",
+            rowMapper(), path);
+        return results.isEmpty() ? Optional.empty() : Optional.of(results.getFirst());
+    }
+
+    public void updateHashFull(long id, String hashFull) {
+        jdbc.update("UPDATE files SET hash_full = ? WHERE id = ?", hashFull, id);
+    }
+
+    public void updateMinhashSignature(long id, byte[] sig) {
+        jdbc.update("UPDATE files SET minhash_signature = ? WHERE id = ?", sig, id);
+    }
+
+    /** All files in a scan with a given MIME type — used by CompareStage for near-dup grouping. */
+    public List<ScannedFile> findByScanIdAndMimeType(long scanId, String mimeType) {
+        return jdbc.query(
+            "SELECT * FROM files WHERE scan_id = ? AND mime_type = ?",
+            rowMapper(), scanId, mimeType);
+    }
+
+    /** Distinct MIME types present in a scan — used to dispatch near-dup handlers. */
+    public List<String> findDistinctMimeTypesByScanId(long scanId) {
+        return jdbc.queryForList(
+            "SELECT DISTINCT mime_type FROM files WHERE scan_id = ? AND mime_type IS NOT NULL",
+            String.class, scanId);
+    }
+
     public long countByScanId(long scanId) {
-        Long count = jdbc.queryForObject("SELECT COUNT(*) FROM files WHERE scan_id = ?", Long.class, scanId);
-        return count != null ? count : 0L;
+        return Objects.requireNonNull(
+            jdbc.queryForObject("SELECT COUNT(*) FROM files WHERE scan_id = ?", Long.class, scanId));
     }
 
     public long totalBytesByScanId(long scanId) {
-        Long total = jdbc.queryForObject("SELECT COALESCE(SUM(size), 0) FROM files WHERE scan_id = ?", Long.class, scanId);
-        return total != null ? total : 0L;
+        return Objects.requireNonNullElse(
+            jdbc.queryForObject("SELECT COALESCE(SUM(size), 0) FROM files WHERE scan_id = ?", Long.class, scanId), 0L);
     }
 
     private RowMapper<ScannedFile> rowMapper() {

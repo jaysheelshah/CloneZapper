@@ -1,0 +1,40 @@
+# Normalise all text files to LF in the repository.
+# Git will convert to CRLF on checkout on Windows if core.autocrlf=true,
+# but the stored copy is always LF — eliminating the "LF will be replaced
+# by CRLF" warnings on commit.
+* text=auto eol=lf
+
+# Explicitly text: source and config
+*.java        text eol=lf
+*.xml         text eol=lf
+*.properties  text eol=lf
+*.yml         text eol=lf
+*.yaml        text eol=lf
+*.md          text eol=lf
+*.sql         text eol=lf
+*.html        text eol=lf
+*.css         text eol=lf
+*.js          text eol=lf
+*.ts          text eol=lf
+*.json        text eol=lf
+*.sh          text eol=lf
+*.gitignore   text eol=lf
+
+# Explicitly binary: never mangle these
+*.jar         binary
+*.class       binary
+*.db          binary
+*.db-shm      binary
+*.db-wal      binary
+*.png         binary
+*.jpg         binary
+*.jpeg        binary
+*.gif         binary
+*.ico         binary
+*.pdf         binary
+*.zip         binary
+*.gz          binary
+*.p12         binary
+*.jks         binary
+*.keystore    binary
+*.map         binary

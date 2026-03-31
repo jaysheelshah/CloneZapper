@@ -91,5 +91,12 @@ coverage/
 scratch/
 tmp/
 
+# ─── Vaadin / frontend generated ────────────────────────────────────────────
+# These files are regenerated at build time — never commit them.
+frontend/generated/
+node_modules/
+package-lock.json
+pnpm-lock.yaml
+
 # ─── Claude Code ────────────────────────────────────────────────────────────
 .claude/
