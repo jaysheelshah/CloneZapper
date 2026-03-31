@@ -476,3 +476,31 @@ sequenceDiagram
 | Run report in archive | `_clonezapper_report.json` + `.html` in each run folder | Persistent history; re-importable into DB on any machine |
 | Incremental re-scan | Reuse fingerprints for unchanged files (`size` + `modified_at` match) | Re-running on same source does no redundant hashing |
 | Overlap warning | Detect source paths covered by recent runs before scanning | Prevents accidental full re-scan; prompts incremental mode |
+
+---
+
+## Next Steps
+
+### Tier 1 — Quick wins (no external dependencies)
+
+| Item | Detail |
+|------|--------|
+| **`ScanCommand` auto-report** | After scan completes, `scan` prints just "Run ID / Phase" — should automatically print the full session report so CLI users see results immediately without a separate `report` call |
+| **Dashboard cleanup/purge actions** | After staging, DashboardView shows the archive path but offers no Cleanup or Purge button — users must drop to the CLI to undo or confirm a stage |
+| **`confidence.threshold` in `application.properties`** | `ScanSettings` hardcodes `0.95` at startup; add `clonezapper.confidence.threshold` property so the default is configurable without touching the UI or recompiling |
+| **Archive re-import on startup** | On launch, scan the configured archive root for `_clonezapper_report.json` files and re-import any runs not already present in the DB — enables cross-machine history and recovery from DB loss |
+
+### Tier 2 — Moderate complexity
+
+| Item | Detail |
+|------|--------|
+| **Concurrency model** | Pipeline is currently single-threaded. Switch to the designed BlockingQueue + ForkJoinPool model (I/O walkers feed a bounded queue; CPU hashers drain it) to hit the >500 MB/s target on large directories |
+| **Auto Queue / Review Queue split in ResultsView** | ResultsView shows all duplicate groups in one flat list. High-confidence groups (≥ threshold) should have a "Stage all auto-queue" bulk action; low-confidence groups should be clearly separated with a direct link to the Review Queue |
+
+### Tier 3 — Cloud providers (OAuth required)
+
+| Item | Detail |
+|------|--------|
+| **Google Drive connector** | OAuth 2.0 (`drive:readonly`), paginated `files.list`, incremental `changes.list` delta token — the biggest product differentiator; implement first |
+| **OneDrive connector** | MSAL OAuth, `/drives/{id}/root/delta` incremental query, `@odata.deltaLink` persistence |
+| **Dropbox connector** | Dropbox SDK OAuth, `files/list_folder` + cursor-based incremental updates |
