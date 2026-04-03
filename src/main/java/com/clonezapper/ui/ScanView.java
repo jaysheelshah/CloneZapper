@@ -3,9 +3,9 @@ package com.clonezapper.ui;
 import com.clonezapper.engine.UnifiedScanner;
 import com.clonezapper.model.ScanRun;
 import com.clonezapper.service.ScanProgressTracker;
+import com.vaadin.flow.component.AttachEvent;
+import com.vaadin.flow.component.DetachEvent;
 import com.vaadin.flow.component.UI;
-import org.springframework.beans.factory.annotation.Value;
-import com.vaadin.flow.shared.Registration;
 import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.button.ButtonVariant;
 import com.vaadin.flow.component.html.H2;
@@ -20,12 +20,15 @@ import com.vaadin.flow.component.textfield.TextArea;
 import com.vaadin.flow.component.textfield.TextField;
 import com.vaadin.flow.router.PageTitle;
 import com.vaadin.flow.router.Route;
+import com.vaadin.flow.shared.Registration;
+import org.springframework.beans.factory.annotation.Value;
 
 import javax.swing.JFileChooser;
 import javax.swing.UIManager;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 @Route(value = "scan", layout = MainLayout.class)
 @PageTitle("Scan — CloneZapper")
@@ -40,22 +43,39 @@ public class ScanView extends VerticalLayout {
         "FAILED",     0.0
     );
 
-    public ScanView(UnifiedScanner scanner, ScanProgressTracker progressTracker,
+    // ── Spring-managed dependencies ───────────────────────────────────────────
+    private final UnifiedScanner scanner;
+    private final ScanProgressTracker progressTracker;
+
+    // ── Form section (hidden while a scan runs) ───────────────────────────────
+    private final VerticalLayout formSection;
+
+    // ── Progress section (shown while a scan runs) ────────────────────────────
+    private final VerticalLayout progressSection;
+    private final ProgressBar progressBar;
+    private final Span phaseLabel;
+    private final Span fileCountLabel;
+
+    // ── Active poll registration (cleaned up on detach) ───────────────────────
+    private Registration pollReg;
+
+    public ScanView(UnifiedScanner scanner,
+                    ScanProgressTracker progressTracker,
                     @Value("${clonezapper.archive.root}") String defaultArchiveRoot) {
+        this.scanner         = scanner;
+        this.progressTracker = progressTracker;
+
         setSpacing(true);
         setPadding(true);
 
-        add(new H2("Start a Scan"));
-        add(new Paragraph("Enter one path per line, or use the Browse button to pick folders."));
-
+        // ── Form ──────────────────────────────────────────────────────────────
         TextArea pathsField = new TextArea("Folders to scan");
         pathsField.setPlaceholder("C:\\Users\\you\\Documents\nC:\\Users\\you\\Downloads");
         pathsField.setWidthFull();
         pathsField.setMinHeight("120px");
 
         Button browseButton = new Button("Browse…");
-        browseButton.addClickListener(event -> openFolderPickerAppend(pathsField, UI.getCurrent()));
-
+        browseButton.addClickListener(e -> openFolderPickerAppend(pathsField, UI.getCurrent()));
         HorizontalLayout pathsToolbar = new HorizontalLayout(browseButton);
         pathsToolbar.setAlignItems(Alignment.CENTER);
 
@@ -66,24 +86,12 @@ public class ScanView extends VerticalLayout {
         archiveField.setHelperText("Duplicate files will be moved here. Can be an external drive.");
 
         Button archiveBrowseButton = new Button("Browse…");
-        archiveBrowseButton.addClickListener(event -> openFolderPickerReplace(archiveField, UI.getCurrent()));
-
+        archiveBrowseButton.addClickListener(e -> openFolderPickerReplace(archiveField, UI.getCurrent()));
         HorizontalLayout archiveToolbar = new HorizontalLayout(archiveBrowseButton);
         archiveToolbar.setAlignItems(Alignment.CENTER);
 
-        ProgressBar progressBar = new ProgressBar();
-        progressBar.setVisible(false);
-        progressBar.setWidthFull();
-
-        Span phaseLabel = new Span();
-        phaseLabel.setVisible(false);
-
-        Span fileCountLabel = new Span();
-        fileCountLabel.setVisible(false);
-
         Button startButton = new Button("Scan");
         startButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
-
         startButton.addClickListener(event -> {
             String raw = pathsField.getValue().trim();
             if (raw.isBlank()) {
@@ -96,54 +104,32 @@ public class ScanView extends VerticalLayout {
                 return;
             }
             List<String> paths = Arrays.stream(raw.split("\\r?\\n"))
-                .map(String::trim)
-                .filter(s -> !s.isBlank())
-                .toList();
+                .map(String::trim).filter(s -> !s.isBlank()).toList();
 
             startButton.setEnabled(false);
             pathsField.setEnabled(false);
             archiveField.setEnabled(false);
-            progressBar.setValue(0);
-            progressBar.setVisible(true);
-            phaseLabel.setText("Starting…");
-            phaseLabel.setVisible(true);
-            fileCountLabel.setVisible(false);
 
             UI ui = UI.getCurrent();
+            enterProgressMode(ui);
 
-            // Poll tracker every 500 ms to update the file count label while scanning
-            ui.setPollInterval(500);
-            Registration[] pollReg = new Registration[1];
-            pollReg[0] = ui.addPollListener(e -> {
-                if ("SCANNING".equals(progressTracker.getPhase())) {
-                    int count = progressTracker.getFilesIndexed();
-                    fileCountLabel.setText(String.format("%,d files found so far…", count));
-                    fileCountLabel.setVisible(true);
-                } else {
-                    fileCountLabel.setVisible(false);
-                }
-            });
+            // onPhase callback gives fast progress bar updates from the scan thread
+            Consumer<String> onPhase = phase -> {
+                double pct = PHASE_PROGRESS.getOrDefault(phase, 0.0);
+                ui.access(() -> {
+                    progressBar.setValue(pct);
+                    phaseLabel.setText(friendlyPhase(phase));
+                });
+            };
 
             Thread scanThread = new Thread(() -> {
                 try {
-                    ScanRun run = scanner.startScan(paths, archiveRoot, phase -> {
-                        double progress = PHASE_PROGRESS.getOrDefault(phase, 0.0);
-                        ui.access(() -> {
-                            progressBar.setValue(progress);
-                            phaseLabel.setText(friendlyPhase(phase));
-                        });
-                    });
-
+                    ScanRun run = scanner.startScan(paths, archiveRoot, onPhase);
                     ui.access(() -> {
-                        pollReg[0].remove();
-                        ui.setPollInterval(-1);
-                        progressBar.setVisible(false);
-                        phaseLabel.setVisible(false);
-                        fileCountLabel.setVisible(false);
+                        exitProgressMode(ui);
                         pathsField.setEnabled(true);
                         archiveField.setEnabled(true);
                         startButton.setEnabled(true);
-
                         Notification ok = new Notification(
                             "Scan complete! Run ID: " + run.getId(),
                             4000, Notification.Position.BOTTOM_START);
@@ -151,14 +137,9 @@ public class ScanView extends VerticalLayout {
                         ok.open();
                         UI.getCurrent().navigate(DashboardView.class);
                     });
-
                 } catch (Exception e) {
                     ui.access(() -> {
-                        pollReg[0].remove();
-                        ui.setPollInterval(-1);
-                        progressBar.setVisible(false);
-                        phaseLabel.setVisible(false);
-                        fileCountLabel.setVisible(false);
+                        exitProgressMode(ui);
                         pathsField.setEnabled(true);
                         archiveField.setEnabled(true);
                         startButton.setEnabled(true);
@@ -172,8 +153,101 @@ public class ScanView extends VerticalLayout {
             scanThread.start();
         });
 
-        add(pathsField, pathsToolbar, archiveField, archiveToolbar, startButton, progressBar, phaseLabel, fileCountLabel);
+        formSection = new VerticalLayout(
+            new H2("Start a Scan"),
+            new Paragraph("Enter one path per line, or use the Browse button to pick folders."),
+            pathsField, pathsToolbar, archiveField, archiveToolbar, startButton);
+        formSection.setSpacing(true);
+        formSection.setPadding(false);
+
+        // ── Progress ──────────────────────────────────────────────────────────
+        progressBar   = new ProgressBar();
+        progressBar.setWidthFull();
+        phaseLabel    = new Span();
+        fileCountLabel = new Span();
+
+        progressSection = new VerticalLayout(
+            new H2("Scan in progress"),
+            progressBar, phaseLabel, fileCountLabel);
+        progressSection.setSpacing(true);
+        progressSection.setPadding(false);
+        progressSection.setVisible(false);
+
+        add(formSection, progressSection);
     }
+
+    // ── Reconnect on navigate-back ────────────────────────────────────────────
+
+    @Override
+    protected void onAttach(AttachEvent event) {
+        super.onAttach(event);
+        if (progressTracker.isActive()) {
+            enterProgressMode(event.getUI());
+        }
+    }
+
+    @Override
+    protected void onDetach(DetachEvent event) {
+        super.onDetach(event);
+        stopPolling(event.getUI());
+    }
+
+    // ── Progress mode helpers ─────────────────────────────────────────────────
+
+    private void enterProgressMode(UI ui) {
+        formSection.setVisible(false);
+        progressSection.setVisible(true);
+        refreshProgress();
+
+        ui.setPollInterval(500);
+        pollReg = ui.addPollListener(e -> {
+            refreshProgress();
+            if (!progressTracker.isActive()) {
+                // Scan finished while the user was watching this reconnected view
+                exitProgressMode(ui);
+                String phase = progressTracker.getPhase();
+                if ("COMPLETE".equals(phase)) {
+                    Notification ok = new Notification(
+                        "Scan complete!", 4000, Notification.Position.BOTTOM_START);
+                    ok.addThemeVariants(NotificationVariant.LUMO_SUCCESS);
+                    ok.open();
+                    ui.navigate(DashboardView.class);
+                } else {
+                    Notification.show("Scan ended with status: " + phase,
+                        5000, Notification.Position.MIDDLE);
+                }
+            }
+        });
+    }
+
+    private void exitProgressMode(UI ui) {
+        stopPolling(ui);
+        progressSection.setVisible(false);
+        formSection.setVisible(true);
+    }
+
+    private void stopPolling(UI ui) {
+        if (pollReg != null) {
+            pollReg.remove();
+            pollReg = null;
+        }
+        ui.setPollInterval(-1);
+    }
+
+    private void refreshProgress() {
+        String phase = progressTracker.getPhase();
+        progressBar.setValue(PHASE_PROGRESS.getOrDefault(phase, 0.0));
+        phaseLabel.setText(friendlyPhase(phase));
+        if ("SCANNING".equals(phase)) {
+            fileCountLabel.setText(
+                String.format("%,d files found so far…", progressTracker.getFilesIndexed()));
+            fileCountLabel.setVisible(true);
+        } else {
+            fileCountLabel.setVisible(false);
+        }
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static String friendlyPhase(String phase) {
         return switch (phase) {
@@ -201,7 +275,7 @@ public class ScanView extends VerticalLayout {
             ui.access(() -> target.setValue(selected)));
     }
 
-    private void openPicker(String title, UI ui, java.util.function.Consumer<String> onSelected) {
+    private void openPicker(String title, UI ui, Consumer<String> onSelected) {
         Thread picker = new Thread(() -> {
             try {
                 UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
