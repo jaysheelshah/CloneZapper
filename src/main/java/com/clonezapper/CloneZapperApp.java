@@ -35,6 +35,9 @@ import picocli.CommandLine.Command;
 public class CloneZapperApp implements Runnable {
 
     public static void main(String[] args) {
+        // Must be set before AWT is touched — spring.main.headless=false alone
+        // is too late because AWT can initialise before Spring's context starts.
+        System.setProperty("java.awt.headless", "false");
         SpringApplication.run(CloneZapperApp.class, args);
     }
 
