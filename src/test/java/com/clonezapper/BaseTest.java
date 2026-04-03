@@ -1,7 +1,10 @@
 package com.clonezapper;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.io.IOException;
@@ -20,8 +23,21 @@ import java.nio.file.Path;
 @ActiveProfiles("test")
 public abstract class BaseTest {
 
+    @Autowired
+    private JdbcTemplate jdbc;
+
     @TempDir
     protected Path tempDir;
+
+    /** Wipe all tables before each test so no rows leak between tests. */
+    @BeforeEach
+    void clearDatabase() {
+        jdbc.execute("DELETE FROM actions");
+        jdbc.execute("DELETE FROM duplicate_members");
+        jdbc.execute("DELETE FROM duplicate_groups");
+        jdbc.execute("DELETE FROM files");
+        jdbc.execute("DELETE FROM scans");
+    }
 
     /**
      * Create a file with UTF-8 text content under {@code tempDir}.
