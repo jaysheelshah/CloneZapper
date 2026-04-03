@@ -15,7 +15,6 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.Executors;
@@ -47,7 +46,7 @@ public class UnifiedScanner {
     private final CompareStage compareStage;
     private final ClusterStage clusterStage;
     private final ScanProgressTracker progressTracker;
-    private final String archiveRoot;
+    private final String defaultArchiveRoot;
 
     public UnifiedScanner(ScanRepository scanRepository,
                           ScanStage scanStage,
@@ -55,29 +54,37 @@ public class UnifiedScanner {
                           CompareStage compareStage,
                           ClusterStage clusterStage,
                           ScanProgressTracker progressTracker,
-                          @Value("${clonezapper.archive.root}") String archiveRoot) {
+                          @Value("${clonezapper.archive.root}") String defaultArchiveRoot) {
         this.scanRepository = scanRepository;
         this.scanStage = scanStage;
         this.candidateStage = candidateStage;
         this.compareStage = compareStage;
         this.clusterStage = clusterStage;
         this.progressTracker = progressTracker;
-        this.archiveRoot = archiveRoot;
+        this.defaultArchiveRoot = defaultArchiveRoot;
     }
+
+    public String getDefaultArchiveRoot() { return defaultArchiveRoot; }
 
     /** Runs the full pipeline with no progress callback. */
     public ScanRun startScan(List<String> rootPaths) {
-        return startScan(rootPaths, phase -> {});
+        return startScan(rootPaths, defaultArchiveRoot, phase -> {});
+    }
+
+    /** Runs the full pipeline with a progress callback and the configured default archive root. */
+    public ScanRun startScan(List<String> rootPaths, Consumer<String> onPhase) {
+        return startScan(rootPaths, defaultArchiveRoot, onPhase);
     }
 
     /**
      * Runs the full pipeline over the given local paths.
      *
-     * @param rootPaths  list of absolute local paths to scan
-     * @param onPhase    callback invoked with the phase name at each stage transition
-     * @return           the completed ScanRun record
+     * @param rootPaths   list of absolute local paths to scan
+     * @param archiveRoot destination folder for archived duplicates
+     * @param onPhase     callback invoked with the phase name at each stage transition
+     * @return            the completed ScanRun record
      */
-    public ScanRun startScan(List<String> rootPaths, Consumer<String> onPhase) {
+    public ScanRun startScan(List<String> rootPaths, String archiveRoot, Consumer<String> onPhase) {
         ScanRun run = new ScanRun();
         run.setPhase("SCANNING");
         run.setCreatedAt(LocalDateTime.now());
@@ -114,17 +121,20 @@ public class UnifiedScanner {
                 progressTracker.updatePhase("COMPARING");
                 var exactPairs   = compareStage.execute(candidates);
                 var nearDupPairs = compareStage.executeNearDup(run.getId());
-                var pairs = new ArrayList<>(exactPairs);
-                pairs.addAll(nearDupPairs);
                 log.info("Stage ③ complete — {} exact + {} near-dup pair(s)",
                     exactPairs.size(), nearDupPairs.size());
 
-                // Stage ④: Cluster
+                // Stage ④: Cluster — exact and near-dup pairs are clustered separately.
+                // A single shared Union-Find would merge them transitively: if A==B (exact)
+                // and A≈C (near-dup), B and C end up in the same group even though they are
+                // unrelated. Keeping the two strategy passes isolated prevents that.
                 phase(run.getId(), "CLUSTERING", onPhase);
                 progressTracker.updatePhase("CLUSTERING");
-                var result = clusterStage.execute(run.getId(), pairs);
-                log.info("Stage ④ complete — {} auto-queue, {} review-queue",
-                    result.autoQueue().size(), result.reviewQueue().size());
+                var exactResult   = clusterStage.execute(run.getId(), exactPairs);
+                var nearDupResult = clusterStage.execute(run.getId(), nearDupPairs);
+                log.info("Stage ④ complete — exact: {}/{} auto/review; near-dup: {}/{} auto/review",
+                    exactResult.autoQueue().size(), exactResult.reviewQueue().size(),
+                    nearDupResult.autoQueue().size(), nearDupResult.reviewQueue().size());
 
                 scanRepository.markCompleted(run.getId());
                 progressTracker.complete();

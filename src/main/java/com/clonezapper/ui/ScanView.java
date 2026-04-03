@@ -4,6 +4,7 @@ import com.clonezapper.engine.UnifiedScanner;
 import com.clonezapper.model.ScanRun;
 import com.clonezapper.service.ScanProgressTracker;
 import com.vaadin.flow.component.UI;
+import org.springframework.beans.factory.annotation.Value;
 import com.vaadin.flow.shared.Registration;
 import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.button.ButtonVariant;
@@ -16,6 +17,7 @@ import com.vaadin.flow.component.orderedlayout.HorizontalLayout;
 import com.vaadin.flow.component.orderedlayout.VerticalLayout;
 import com.vaadin.flow.component.progressbar.ProgressBar;
 import com.vaadin.flow.component.textfield.TextArea;
+import com.vaadin.flow.component.textfield.TextField;
 import com.vaadin.flow.router.PageTitle;
 import com.vaadin.flow.router.Route;
 
@@ -38,7 +40,8 @@ public class ScanView extends VerticalLayout {
         "FAILED",     0.0
     );
 
-    public ScanView(UnifiedScanner scanner, ScanProgressTracker progressTracker) {
+    public ScanView(UnifiedScanner scanner, ScanProgressTracker progressTracker,
+                    @Value("${clonezapper.archive.root}") String defaultArchiveRoot) {
         setSpacing(true);
         setPadding(true);
 
@@ -51,10 +54,22 @@ public class ScanView extends VerticalLayout {
         pathsField.setMinHeight("120px");
 
         Button browseButton = new Button("Browse…");
-        browseButton.addClickListener(event -> openFolderPicker(pathsField, UI.getCurrent()));
+        browseButton.addClickListener(event -> openFolderPickerAppend(pathsField, UI.getCurrent()));
 
         HorizontalLayout pathsToolbar = new HorizontalLayout(browseButton);
         pathsToolbar.setAlignItems(Alignment.CENTER);
+
+        TextField archiveField = new TextField("Archive destination");
+        archiveField.setPlaceholder("E.g. D:\\CloneZapper-Archive");
+        archiveField.setValue(defaultArchiveRoot);
+        archiveField.setWidthFull();
+        archiveField.setHelperText("Duplicate files will be moved here. Can be an external drive.");
+
+        Button archiveBrowseButton = new Button("Browse…");
+        archiveBrowseButton.addClickListener(event -> openFolderPickerReplace(archiveField, UI.getCurrent()));
+
+        HorizontalLayout archiveToolbar = new HorizontalLayout(archiveBrowseButton);
+        archiveToolbar.setAlignItems(Alignment.CENTER);
 
         ProgressBar progressBar = new ProgressBar();
         progressBar.setVisible(false);
@@ -75,6 +90,11 @@ public class ScanView extends VerticalLayout {
                 Notification.show("Please enter at least one path.", 3000, Notification.Position.MIDDLE);
                 return;
             }
+            String archiveRoot = archiveField.getValue().trim();
+            if (archiveRoot.isBlank()) {
+                Notification.show("Please enter an archive destination.", 3000, Notification.Position.MIDDLE);
+                return;
+            }
             List<String> paths = Arrays.stream(raw.split("\\r?\\n"))
                 .map(String::trim)
                 .filter(s -> !s.isBlank())
@@ -82,6 +102,7 @@ public class ScanView extends VerticalLayout {
 
             startButton.setEnabled(false);
             pathsField.setEnabled(false);
+            archiveField.setEnabled(false);
             progressBar.setValue(0);
             progressBar.setVisible(true);
             phaseLabel.setText("Starting…");
@@ -105,7 +126,7 @@ public class ScanView extends VerticalLayout {
 
             Thread scanThread = new Thread(() -> {
                 try {
-                    ScanRun run = scanner.startScan(paths, phase -> {
+                    ScanRun run = scanner.startScan(paths, archiveRoot, phase -> {
                         double progress = PHASE_PROGRESS.getOrDefault(phase, 0.0);
                         ui.access(() -> {
                             progressBar.setValue(progress);
@@ -120,6 +141,7 @@ public class ScanView extends VerticalLayout {
                         phaseLabel.setVisible(false);
                         fileCountLabel.setVisible(false);
                         pathsField.setEnabled(true);
+                        archiveField.setEnabled(true);
                         startButton.setEnabled(true);
 
                         Notification ok = new Notification(
@@ -138,6 +160,7 @@ public class ScanView extends VerticalLayout {
                         phaseLabel.setVisible(false);
                         fileCountLabel.setVisible(false);
                         pathsField.setEnabled(true);
+                        archiveField.setEnabled(true);
                         startButton.setEnabled(true);
                         Notification.show("Scan failed: " + e.getMessage(),
                             5000, Notification.Position.MIDDLE);
@@ -149,7 +172,7 @@ public class ScanView extends VerticalLayout {
             scanThread.start();
         });
 
-        add(pathsField, pathsToolbar, startButton, progressBar, phaseLabel, fileCountLabel);
+        add(pathsField, pathsToolbar, archiveField, archiveToolbar, startButton, progressBar, phaseLabel, fileCountLabel);
     }
 
     private static String friendlyPhase(String phase) {
@@ -164,12 +187,21 @@ public class ScanView extends VerticalLayout {
         };
     }
 
-    /**
-     * Opens the OS-native folder picker using JFileChooser (valid because this
-     * Vaadin app runs locally — the JVM has display access on the user's machine).
-     * The picked path is appended to {@code pathsField} on the Vaadin UI thread.
-     */
-    private void openFolderPicker(TextArea pathsField, UI ui) {
+    /** Opens a folder picker and APPENDS the chosen path to a multi-line TextArea. */
+    private void openFolderPickerAppend(TextArea target, UI ui) {
+        openPicker("Select a folder to scan", ui, selected -> {
+            String existing = target.getValue().trim();
+            ui.access(() -> target.setValue(existing.isEmpty() ? selected : existing + "\n" + selected));
+        });
+    }
+
+    /** Opens a folder picker and REPLACES the value of a single-line TextField. */
+    private void openFolderPickerReplace(TextField target, UI ui) {
+        openPicker("Select archive destination", ui, selected ->
+            ui.access(() -> target.setValue(selected)));
+    }
+
+    private void openPicker(String title, UI ui, java.util.function.Consumer<String> onSelected) {
         Thread picker = new Thread(() -> {
             try {
                 UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
@@ -177,16 +209,11 @@ public class ScanView extends VerticalLayout {
 
             JFileChooser chooser = new JFileChooser();
             chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
-            chooser.setDialogTitle("Select a folder to scan");
+            chooser.setDialogTitle(title);
             chooser.setAcceptAllFileFilterUsed(false);
 
-            int result = chooser.showOpenDialog(null);
-            if (result == JFileChooser.APPROVE_OPTION) {
-                String selected = chooser.getSelectedFile().getAbsolutePath();
-                ui.access(() -> {
-                    String existing = pathsField.getValue().trim();
-                    pathsField.setValue(existing.isEmpty() ? selected : existing + "\n" + selected);
-                });
+            if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) {
+                onSelected.accept(chooser.getSelectedFile().getAbsolutePath());
             }
         });
         picker.setDaemon(true);

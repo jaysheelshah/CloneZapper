@@ -13,6 +13,9 @@ import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.button.ButtonVariant;
 import com.vaadin.flow.component.confirmdialog.ConfirmDialog;
 import com.vaadin.flow.component.grid.Grid;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.vaadin.flow.component.html.Anchor;
 import com.vaadin.flow.component.html.H2;
 import com.vaadin.flow.component.html.Hr;
 import com.vaadin.flow.component.html.Paragraph;
@@ -29,10 +32,17 @@ import com.vaadin.flow.router.BeforeEnterObserver;
 import com.vaadin.flow.router.PageTitle;
 import com.vaadin.flow.router.Route;
 import com.vaadin.flow.router.RouteParameters;
+import com.vaadin.flow.server.StreamResource;
 import com.vaadin.flow.theme.lumo.LumoUtility;
 import org.springframework.beans.factory.annotation.Value;
 
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @Route(value = "results/:runId?", layout = MainLayout.class)
 @PageTitle("Results — CloneZapper")
@@ -113,7 +123,7 @@ public class ResultsView extends VerticalLayout implements BeforeEnterObserver {
         }
 
         content.add(new Hr());
-        content.add(buildActionBar(run, summary));
+        content.add(buildActionBar(run, summary, groups));
         content.add(buildGroupGrid(groups));
     }
 
@@ -159,7 +169,7 @@ public class ResultsView extends VerticalLayout implements BeforeEnterObserver {
 
     // ── Action bar ────────────────────────────────────────────────────────────
 
-    private Component buildActionBar(ScanRun run, PreviewSummary summary) {
+    private Component buildActionBar(ScanRun run, PreviewSummary summary, List<GroupPreviewRow> groups) {
         String archiveRoot = run.getArchiveRoot() != null ? run.getArchiveRoot() : defaultArchiveRoot;
 
         Button archiveButton = new Button("Archive duplicates →");
@@ -193,7 +203,87 @@ public class ResultsView extends VerticalLayout implements BeforeEnterObserver {
             dialog.open();
         });
 
-        return archiveButton;
+        // JSON download — StreamResource builds the content lazily when the browser fetches it
+        StreamResource jsonResource = new StreamResource(
+            "clonezapper-scan-" + run.getId() + ".json",
+            () -> {
+                try {
+                    byte[] bytes = buildJsonExport(run, summary, groups)
+                        .getBytes(StandardCharsets.UTF_8);
+                    return new ByteArrayInputStream(bytes);
+                } catch (Exception ex) {
+                    return new ByteArrayInputStream("{}".getBytes(StandardCharsets.UTF_8));
+                }
+            });
+        Anchor downloadAnchor = new Anchor(jsonResource, "");
+        downloadAnchor.getElement().setAttribute("download", true);
+        downloadAnchor.setVisible(false);
+
+        Button downloadButton = new Button("Download JSON");
+        downloadButton.addClickListener(e ->
+            downloadAnchor.getElement().executeJs("this.click()"));
+
+        HorizontalLayout bar = new HorizontalLayout(archiveButton, downloadButton, downloadAnchor);
+        bar.setAlignItems(Alignment.CENTER);
+        return bar;
+    }
+
+    private String buildJsonExport(ScanRun run, PreviewSummary summary, List<GroupPreviewRow> groups)
+            throws Exception {
+        ObjectMapper mapper = new ObjectMapper()
+            .findAndRegisterModules()
+            .enable(SerializationFeature.INDENT_OUTPUT);
+
+        Map<String, Object> root = new LinkedHashMap<>();
+        root.put("scanId",      run.getId());
+        root.put("runLabel",    run.getRunLabel());
+        root.put("exportedAt",  LocalDateTime.now().toString());
+
+        Map<String, Object> sum = new LinkedHashMap<>();
+        sum.put("totalFilesScanned", summary.totalFilesScanned());
+        sum.put("totalGroups",       summary.totalGroups());
+        sum.put("exactGroups",       summary.exactGroups());
+        sum.put("nearDupGroups",     summary.nearDupGroups());
+        sum.put("totalDupeCount",    summary.totalDupeCount());
+        sum.put("reclaimableBytes",  summary.reclaimableBytes());
+        sum.put("avgConfidence",     summary.avgConfidence());
+        sum.put("autoQueueCount",    summary.autoQueueCount());
+        sum.put("reviewQueueCount",  summary.reviewQueueCount());
+        sum.put("archiveRoot",       summary.archiveRoot());
+        root.put("summary", sum);
+
+        List<Map<String, Object>> groupList = new ArrayList<>();
+        for (GroupPreviewRow g : groups) {
+            Map<String, Object> gMap = new LinkedHashMap<>();
+            gMap.put("groupId",           g.groupId());
+            gMap.put("strategy",          g.strategy());
+            gMap.put("confidence",        g.confidence());
+            gMap.put("memberCount",       g.memberCount());
+            gMap.put("dupeCount",         g.dupeCount());
+            gMap.put("reclaimableBytes",  g.reclaimableBytes());
+            gMap.put("totalBytes",        g.totalBytes());
+            gMap.put("canonicalPath",     g.canonicalPath());
+            gMap.put("canonicalMimeType", g.canonicalMimeType());
+
+            List<Map<String, Object>> memberList = new ArrayList<>();
+            for (MemberPreviewRow m : previewService.buildMembers(g.groupId())) {
+                Map<String, Object> mMap = new LinkedHashMap<>();
+                mMap.put("fileId",               m.fileId());
+                mMap.put("path",                 m.path());
+                mMap.put("sizeBytes",            m.sizeBytes());
+                mMap.put("modifiedAt",           m.modifiedAt() != null ? m.modifiedAt().toString() : null);
+                mMap.put("mimeType",             m.mimeType());
+                mMap.put("confidence",           m.confidence());
+                mMap.put("isCanonical",          m.isCanonical());
+                mMap.put("proposedArchivePath",  m.proposedArchivePath());
+                memberList.add(mMap);
+            }
+            gMap.put("members", memberList);
+            groupList.add(gMap);
+        }
+        root.put("groups", groupList);
+
+        return mapper.writeValueAsString(root);
     }
 
     // ── Group grid ────────────────────────────────────────────────────────────
@@ -260,7 +350,7 @@ public class ResultsView extends VerticalLayout implements BeforeEnterObserver {
 
         detail.setItems(members);
         detail.setWidthFull();
-        detail.setAllRowsVisible(true);
+        detail.setHeight("280px");
 
         VerticalLayout wrapper = new VerticalLayout(detail);
         wrapper.setPadding(false);
