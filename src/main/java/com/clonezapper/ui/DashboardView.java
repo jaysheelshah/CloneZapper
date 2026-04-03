@@ -19,6 +19,8 @@ import com.vaadin.flow.router.PageTitle;
 import com.vaadin.flow.router.Route;
 import com.vaadin.flow.theme.lumo.LumoUtility;
 
+import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -34,6 +36,10 @@ public class DashboardView extends VerticalLayout {
         setPadding(true);
 
         add(new H2("Dashboard"));
+
+        // Reconnect banner — shown when a scan was in-progress the last time the user was here
+        scanRepository.findInProgress().ifPresent(inProgress ->
+            add(buildReconnectBanner(inProgress)));
 
         Optional<ScanRun> latest = scanRepository.findLatest();
 
@@ -100,6 +106,71 @@ public class DashboardView extends VerticalLayout {
         Button startScan = new Button("Start New Scan", e -> UI.getCurrent().navigate(ScanView.class));
         startScan.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
         add(startScan);
+    }
+
+    // ── Reconnect banner ──────────────────────────────────────────────────────
+
+    /**
+     * Returns a banner describing the state of an in-progress scan based on
+     * how long ago the heartbeat was written.
+     * <p>
+     * Thresholds:
+     *   < 30 s   → scan is actively running (machine was sleeping, now awake)
+     *   30 s–5 m → probably resuming after sleep or a brief disruption
+     *   > 5 m    → scan appears interrupted (JVM likely crashed or killed)
+     */
+    private Div buildReconnectBanner(ScanRun run) {
+        HeartbeatStatus status = evaluateHeartbeat(run.getLastHeartbeat());
+
+        String age = run.getLastHeartbeat() != null
+            ? formatAge(Duration.between(run.getLastHeartbeat(), LocalDateTime.now()))
+            : "unknown";
+
+        String message = switch (status) {
+            case RUNNING   -> "Scan is running — last heartbeat " + age + " ago.";
+            case RESUMING  -> "Scan was running — last heartbeat " + age + " ago. " +
+                              "It may be resuming after sleep.";
+            case INTERRUPTED -> "Scan appears interrupted — last heartbeat " + age + " ago. " +
+                                "The process may have been killed. " +
+                                "You can start a new scan when ready.";
+            case UNKNOWN   -> "A scan is in progress (no heartbeat recorded).";
+        };
+
+        Div banner = new Div(new Span(message));
+        banner.getStyle()
+            .set("padding", "var(--lumo-space-m)")
+            .set("border-radius", "var(--lumo-border-radius-m)")
+            .set("margin-bottom", "var(--lumo-space-m)");
+
+        switch (status) {
+            case RUNNING   -> banner.getStyle().set("background", "var(--lumo-success-color-10pct)")
+                                               .set("color", "var(--lumo-success-text-color)");
+            case RESUMING  -> banner.getStyle().set("background", "var(--lumo-warning-color-10pct)")
+                                               .set("color", "var(--lumo-warning-text-color)");
+            case INTERRUPTED, UNKNOWN ->
+                              banner.getStyle().set("background", "var(--lumo-error-color-10pct)")
+                                               .set("color", "var(--lumo-error-text-color)");
+        }
+
+        return banner;
+    }
+
+    /** Evaluates the heartbeat timestamp against fixed staleness thresholds. */
+    public static HeartbeatStatus evaluateHeartbeat(LocalDateTime lastHeartbeat) {
+        if (lastHeartbeat == null) return HeartbeatStatus.UNKNOWN;
+        long seconds = Duration.between(lastHeartbeat, LocalDateTime.now()).toSeconds();
+        if (seconds < 30)   return HeartbeatStatus.RUNNING;
+        if (seconds < 300)  return HeartbeatStatus.RESUMING;
+        return HeartbeatStatus.INTERRUPTED;
+    }
+
+    public enum HeartbeatStatus { RUNNING, RESUMING, INTERRUPTED, UNKNOWN }
+
+    private static String formatAge(Duration d) {
+        long s = d.toSeconds();
+        if (s < 60)   return s + "s";
+        if (s < 3600) return (s / 60) + "m";
+        return (s / 3600) + "h " + ((s % 3600) / 60) + "m";
     }
 
     private HorizontalLayout buildStatCard(String label, String value) {

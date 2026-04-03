@@ -12,6 +12,7 @@ public class ScanRun {
     private LocalDateTime completedAt;
     private String archiveRoot;
     private String runLabel;
+    private LocalDateTime lastHeartbeat;
 
     public ScanRun() {}
 
@@ -38,6 +39,9 @@ public class ScanRun {
 
     public String getRunLabel() { return runLabel; }
     public void setRunLabel(String runLabel) { this.runLabel = runLabel; }
+
+    public LocalDateTime getLastHeartbeat() { return lastHeartbeat; }
+    public void setLastHeartbeat(LocalDateTime lastHeartbeat) { this.lastHeartbeat = lastHeartbeat; }
 
     @Override
     public String toString() {

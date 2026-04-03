@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.IntConsumer;
 import java.util.stream.Collectors;
 
 /**
@@ -66,6 +67,16 @@ public class ScanStage {
      */
     public List<ScannedFile> execute(long scanRunId, List<String> rootPaths,
                                      Set<String> excludePaths) {
+        return execute(scanRunId, rootPaths, excludePaths, count -> {});
+    }
+
+    /**
+     * Same as {@link #execute(long, List, Set)} but fires {@code onFileIndexed}
+     * with the running total after every successfully indexed file.
+     * Used by {@link com.clonezapper.engine.UnifiedScanner} to drive live progress.
+     */
+    public List<ScannedFile> execute(long scanRunId, List<String> rootPaths,
+                                     Set<String> excludePaths, IntConsumer onFileIndexed) {
         // Normalise exclusion paths once up-front
         Set<Path> excluded = excludePaths.stream()
             .map(p -> Path.of(p).toAbsolutePath().normalize())
@@ -85,6 +96,7 @@ public class ScanStage {
                         ScannedFile file = processFile(scanRunId, path);
                         fileRepository.save(file);
                         results.add(file);
+                        onFileIndexed.accept(results.size());
                         log.debug("Scanned: {} ({} bytes)", path, file.getSize());
                     } catch (IOException e) {
                         log.warn("Skipping {}: {}", path, e.getMessage());

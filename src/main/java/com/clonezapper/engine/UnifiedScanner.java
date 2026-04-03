@@ -7,6 +7,7 @@ import com.clonezapper.engine.pipeline.CompareStage;
 import com.clonezapper.engine.pipeline.ScanStage;
 import com.clonezapper.model.ScanRun;
 import com.clonezapper.model.ScannedFile;
+import com.clonezapper.service.ScanProgressTracker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -17,6 +18,9 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 /**
@@ -42,6 +46,7 @@ public class UnifiedScanner {
     private final CandidateStage candidateStage;
     private final CompareStage compareStage;
     private final ClusterStage clusterStage;
+    private final ScanProgressTracker progressTracker;
     private final String archiveRoot;
 
     public UnifiedScanner(ScanRepository scanRepository,
@@ -49,12 +54,14 @@ public class UnifiedScanner {
                           CandidateStage candidateStage,
                           CompareStage compareStage,
                           ClusterStage clusterStage,
+                          ScanProgressTracker progressTracker,
                           @Value("${clonezapper.archive.root}") String archiveRoot) {
         this.scanRepository = scanRepository;
         this.scanStage = scanStage;
         this.candidateStage = candidateStage;
         this.compareStage = compareStage;
         this.clusterStage = clusterStage;
+        this.progressTracker = progressTracker;
         this.archiveRoot = archiveRoot;
     }
 
@@ -75,45 +82,61 @@ public class UnifiedScanner {
         run.setPhase("SCANNING");
         run.setCreatedAt(LocalDateTime.now());
         run.setRunLabel("run_" + LocalDateTime.now().format(RUN_LABEL_FORMAT));
+        run.setArchiveRoot(archiveRoot);
         scanRepository.save(run);
 
         log.info("Starting scan run {} over {} path(s)", run.getId(), rootPaths.size());
+        progressTracker.start(run.getId());
 
-        try {
-            // Stage ①: Scan — exclude the archive root to avoid re-indexing staged files
-            phase(run.getId(), "SCANNING", onPhase);
-            List<ScannedFile> files = scanStage.execute(
-                run.getId(), rootPaths, Set.of(archiveRoot));
-            log.info("Stage ① complete — {} files indexed", files.size());
+        try (ScheduledExecutorService heartbeat = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "clonezapper-heartbeat");
+            t.setDaemon(true);
+            return t;
+        })) {
+            heartbeat.scheduleAtFixedRate(
+                () -> scanRepository.updateHeartbeat(run.getId()), 0, 10, TimeUnit.SECONDS);
+            try {
+                // Stage ①: Scan — exclude the archive root to avoid re-indexing staged files
+                phase(run.getId(), "SCANNING", onPhase);
+                List<ScannedFile> files = scanStage.execute(
+                    run.getId(), rootPaths, Set.of(archiveRoot),
+                    count -> progressTracker.fileIndexed());
+                log.info("Stage ① complete — {} files indexed", files.size());
 
-            // Stage ②: Candidates
-            phase(run.getId(), "CANDIDATES", onPhase);
-            var candidates = candidateStage.execute(run.getId());
-            log.info("Stage ② complete — {} candidate group(s)", candidates.size());
+                // Stage ②: Candidates
+                phase(run.getId(), "CANDIDATES", onPhase);
+                progressTracker.updatePhase("CANDIDATES");
+                var candidates = candidateStage.execute(run.getId());
+                log.info("Stage ② complete — {} candidate group(s)", candidates.size());
 
-            // Stage ③: Compare — exact-hash pass + near-dup pass
-            phase(run.getId(), "COMPARING", onPhase);
-            var exactPairs   = compareStage.execute(candidates);
-            var nearDupPairs = compareStage.executeNearDup(run.getId());
-            var pairs = new ArrayList<>(exactPairs);
-            pairs.addAll(nearDupPairs);
-            log.info("Stage ③ complete — {} exact + {} near-dup pair(s)",
-                exactPairs.size(), nearDupPairs.size());
+                // Stage ③: Compare — exact-hash pass + near-dup pass
+                phase(run.getId(), "COMPARING", onPhase);
+                progressTracker.updatePhase("COMPARING");
+                var exactPairs   = compareStage.execute(candidates);
+                var nearDupPairs = compareStage.executeNearDup(run.getId());
+                var pairs = new ArrayList<>(exactPairs);
+                pairs.addAll(nearDupPairs);
+                log.info("Stage ③ complete — {} exact + {} near-dup pair(s)",
+                    exactPairs.size(), nearDupPairs.size());
 
-            // Stage ④: Cluster
-            phase(run.getId(), "CLUSTERING", onPhase);
-            var result = clusterStage.execute(run.getId(), pairs);
-            log.info("Stage ④ complete — {} auto-queue, {} review-queue",
-                result.autoQueue().size(), result.reviewQueue().size());
+                // Stage ④: Cluster
+                phase(run.getId(), "CLUSTERING", onPhase);
+                progressTracker.updatePhase("CLUSTERING");
+                var result = clusterStage.execute(run.getId(), pairs);
+                log.info("Stage ④ complete — {} auto-queue, {} review-queue",
+                    result.autoQueue().size(), result.reviewQueue().size());
 
-            scanRepository.markCompleted(run.getId());
-            phase(run.getId(), "COMPLETE", onPhase);
+                scanRepository.markCompleted(run.getId());
+                progressTracker.complete();
+                phase(run.getId(), "COMPLETE", onPhase);
 
-        } catch (Exception e) {
-            log.error("Scan run {} failed: {}", run.getId(), e.getMessage(), e);
-            scanRepository.updatePhase(run.getId(), "FAILED");
-            onPhase.accept("FAILED");
-        }
+            } catch (Exception e) {
+                log.error("Scan run {} failed: {}", run.getId(), e.getMessage(), e);
+                scanRepository.updatePhase(run.getId(), "FAILED");
+                progressTracker.fail();
+                onPhase.accept("FAILED");
+            }
+        } // heartbeat.close() shuts down the scheduler
 
         return scanRepository.findById(run.getId()).orElse(run);
     }

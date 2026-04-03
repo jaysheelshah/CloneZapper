@@ -339,7 +339,7 @@ public class ExecuteStage {
      * Windows: C:\Users\foo\file.txt → {archive}/run_{id}/C/Users/foo/file.txt
      * Unix:    /home/foo/file.txt    → {archive}/run_{id}/home/foo/file.txt
      */
-    static Path buildArchivePath(String archiveRoot, long scanRunId, String originalPath) {
+    public static Path buildArchivePath(String archiveRoot, long scanRunId, String originalPath) {
         Path original = Path.of(originalPath);
         String root = original.getRoot() != null ? original.getRoot().toString() : "";
         // Strip drive colon and separators → "C:\" becomes "C", "/" becomes ""

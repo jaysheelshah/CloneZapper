@@ -9,7 +9,8 @@ CREATE TABLE IF NOT EXISTS scans (
     created_at          TEXT    NOT NULL,
     completed_at        TEXT,
     archive_root        TEXT,
-    run_label           TEXT
+    run_label           TEXT,
+    last_heartbeat      TEXT
 );
 
 CREATE TABLE IF NOT EXISTS files (

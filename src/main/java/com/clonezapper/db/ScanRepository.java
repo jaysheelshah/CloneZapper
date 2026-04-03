@@ -7,6 +7,7 @@ import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Repository;
 
+import jakarta.annotation.PostConstruct;
 import java.sql.PreparedStatement;
 import java.sql.Statement;
 import java.time.LocalDateTime;
@@ -21,6 +22,20 @@ public class ScanRepository {
 
     public ScanRepository(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
+    }
+
+    /**
+     * Adds the last_heartbeat column to existing databases created before this
+     * column was introduced. Safe to run on new databases too — the exception is
+     * swallowed when the column already exists.
+     */
+    @PostConstruct
+    public void migrate() {
+        try {
+            jdbc.execute("ALTER TABLE scans ADD COLUMN last_heartbeat TEXT");
+        } catch (Exception ignored) {
+            // Column already exists — safe to ignore
+        }
     }
 
     public ScanRun save(ScanRun run) {
@@ -49,6 +64,25 @@ public class ScanRepository {
 
     public void updateArchiveRoot(long id, String archiveRoot) {
         jdbc.update("UPDATE scans SET archive_root = ? WHERE id = ?", archiveRoot, id);
+    }
+
+    /** Stamps the current time as the heartbeat for an active scan. Called every ~10 s. */
+    public void updateHeartbeat(long id) {
+        jdbc.update("UPDATE scans SET last_heartbeat = ? WHERE id = ?",
+            LocalDateTime.now().toString(), id);
+    }
+
+    /**
+     * Returns the most recent scan that is still in a non-terminal phase.
+     * Used by the Dashboard to detect an in-progress or interrupted scan on reconnect.
+     */
+    public Optional<ScanRun> findInProgress() {
+        List<ScanRun> results = jdbc.query(
+            "SELECT * FROM scans " +
+            "WHERE phase NOT IN ('COMPLETE','FAILED','PURGED','CLEANED','STAGED') " +
+            "ORDER BY created_at DESC LIMIT 1",
+            rowMapper());
+        return results.isEmpty() ? Optional.empty() : Optional.of(results.getFirst());
     }
 
     public void markCompleted(long id) {
@@ -90,6 +124,8 @@ public class ScanRepository {
             if (completedAt != null) run.setCompletedAt(LocalDateTime.parse(completedAt));
             run.setArchiveRoot(rs.getString("archive_root"));
             run.setRunLabel(rs.getString("run_label"));
+            String lastHeartbeat = rs.getString("last_heartbeat");
+            if (lastHeartbeat != null) run.setLastHeartbeat(LocalDateTime.parse(lastHeartbeat));
             return run;
         };
     }
