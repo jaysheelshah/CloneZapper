@@ -79,20 +79,49 @@ public class ClusterStage {
         for (Set<Long> cluster : clusters.values()) {
             if (cluster.size() < 2) continue;
 
-            // Confidence = minimum similarity across all pairs in this cluster
-            double confidence = pairs.stream()
-                .filter(p -> cluster.contains(p.fileIdA()) && cluster.contains(p.fileIdB()))
-                .mapToDouble(CompareStage.ScoredPair::similarity)
-                .min()
-                .orElse(0.0);
-
+            // Determine strategy early — needed to decide whether to prune by size.
             String strategy = pairs.stream()
                 .filter(p -> cluster.contains(p.fileIdA()))
                 .map(CompareStage.ScoredPair::strategy)
                 .findFirst()
                 .orElse("unknown");
 
-            Long canonicalId = selectCanonical(cluster);
+            // Load all file records for this cluster once.
+            Map<Long, ScannedFile> fileMap = new LinkedHashMap<>();
+            for (Long id : cluster) {
+                fileRepository.findById(id).ifPresent(f -> fileMap.put(id, f));
+            }
+
+            // For near-dup clusters, remove members whose size deviates too much from
+            // the canonical. The pairwise size filter in CompareStage prevents direct
+            // comparison of differently-sized files, but Union-Find transitivity can still
+            // chain them (A≈B, B≈C → A and C in same cluster even if size(A)/size(C) << 0.5).
+            if (!strategy.startsWith("exact")) {
+                Long canonicalId = selectCanonical(fileMap, cluster);
+                ScannedFile canonical = fileMap.get(canonicalId);
+                if (canonical != null && canonical.getSize() > 0) {
+                    final long cSize = canonical.getSize();
+                    cluster.removeIf(id -> {
+                        if (id.equals(canonicalId)) return false;
+                        ScannedFile f = fileMap.get(id);
+                        if (f == null) return true;
+                        long sz = f.getSize();
+                        if (sz <= 0) return true;
+                        double ratio = (double) Math.min(cSize, sz) / Math.max(cSize, sz);
+                        return ratio < CompareStage.MIN_SIZE_RATIO;
+                    });
+                    if (cluster.size() < 2) continue;
+                }
+            }
+
+            // Confidence = minimum similarity across all retained pairs in this cluster.
+            double confidence = pairs.stream()
+                .filter(p -> cluster.contains(p.fileIdA()) && cluster.contains(p.fileIdB()))
+                .mapToDouble(CompareStage.ScoredPair::similarity)
+                .min()
+                .orElse(0.0);
+
+            Long canonicalId = selectCanonical(fileMap, cluster);
 
             DuplicateGroup group = new DuplicateGroup();
             group.setScanId(scanRunId);
@@ -123,9 +152,10 @@ public class ClusterStage {
 
     // ── Canonical selection ───────────────────────────────────────────────────
 
-    private Long selectCanonical(Set<Long> fileIds) {
+    /** Select canonical from a pre-loaded file map (avoids repeat DB lookups). */
+    private Long selectCanonical(Map<Long, ScannedFile> fileMap, Set<Long> fileIds) {
         return fileIds.stream()
-            .map(id -> fileRepository.findById(id).orElse(null))
+            .map(fileMap::get)
             .filter(Objects::nonNull)
             .min(Comparator
                 .comparing((ScannedFile f) ->

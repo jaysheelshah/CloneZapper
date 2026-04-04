@@ -34,6 +34,15 @@ public class ImageHandler implements FileTypeHandler {
     /** Fingerprint size in bytes (one bit per comparison = 64 bits = 8 bytes). */
     public static final int FINGERPRINT_BYTES = HASH_WIDTH * HASH_HEIGHT / 8;
 
+    /**
+     * Minimum pixel area (width × height) for dHash fingerprinting.
+     * Images smaller than 32×32 (1024 pixels) have insufficient spatial detail —
+     * when downsampled to 9×8, solid-colour icons and spacers all produce near-zero
+     * hashes, making unrelated tiny images appear similar. Returns empty fingerprint
+     * for sub-threshold images so callers treat them as "not comparable".
+     */
+    public static final int MIN_IMAGE_PIXELS = 1024;
+
     @Override
     public boolean canHandle(String mimeType) {
         return mimeType != null && mimeType.startsWith("image/");
@@ -50,6 +59,10 @@ public class ImageHandler implements FileTypeHandler {
         BufferedImage image = ImageIO.read(file.toFile());
         if (image == null) {
             log.warn("Could not decode image: {}", file.getFileName());
+            return new byte[0];
+        }
+        if (image.getWidth() * image.getHeight() < MIN_IMAGE_PIXELS) {
+            log.debug("Skipping tiny image ({}×{}): {}", image.getWidth(), image.getHeight(), file.getFileName());
             return new byte[0];
         }
         return dHash(image);

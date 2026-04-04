@@ -94,6 +94,10 @@ public class ScanStage {
                     }
                     try {
                         ScannedFile file = processFile(scanRunId, path);
+                        if (file.getSize() == 0) {
+                            log.debug("Skipping zero-byte file: {}", path);
+                            return;
+                        }
                         fileRepository.save(file);
                         results.add(file);
                         onFileIndexed.accept(results.size());

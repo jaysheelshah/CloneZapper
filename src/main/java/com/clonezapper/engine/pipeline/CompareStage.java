@@ -45,6 +45,7 @@ public class CompareStage {
      */
     public static final double MIN_SIZE_RATIO = 0.5;
 
+
     private final FileRepository fileRepository;
     private final HashService hashService;
     private final HandlerRegistry handlerRegistry;

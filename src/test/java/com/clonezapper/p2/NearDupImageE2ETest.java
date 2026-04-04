@@ -33,9 +33,9 @@ class NearDupImageE2ETest extends BaseTest {
 
     @Test
     void similarImagesDetectedAsNearDup() throws IOException {
-        // Row 0-6: horizontal gradient (same); row 7: inverted → dHash ~0.875
+        // Rows 0-6: horizontal gradient (same); row 7: inverted → dHash ~0.875
         writeGradient("img_a.png", false);
-        writeGradient("img_b.png", true);   // one row inverted
+        writeGradient("img_b.png", true);   // last row inverted
 
         ScanRun run = scanner.startScan(List.of(tempDir.toString()));
         assertThat(run.getPhase()).isEqualTo("COMPLETE");
@@ -81,7 +81,7 @@ class NearDupImageE2ETest extends BaseTest {
 
     @Test
     void threeImagesOneUniqueProducesOneGroup() throws IOException {
-        // img_a and img_b share most dHash bits (gradient, last row differs)
+        // img_a and img_b share 7/8 dHash rows (row 7 inverted in img_b)
         writeGradient("img_a.png", false);
         writeGradient("img_b.png", true);
         // Fully inverted gradient: dHash ≈ all 0xFF → 0% similarity with the black→white gradients
@@ -99,13 +99,17 @@ class NearDupImageE2ETest extends BaseTest {
     // ── image helpers ─────────────────────────────────────────────────────────
 
     /**
-     * Creates a 64×8 PNG with a horizontal gradient. If {@code invertLastRow},
+     * Creates a 256×8 PNG with a horizontal gradient. If {@code invertLastRow},
      * row 7 has an inverted gradient — producing a known dHash difference.
+     * Height = 8 matches dHash's output height exactly, so each source row maps
+     * 1-to-1 to a dHash row and the inverted row 7 is reliably detected.
+     * 256×8 = 2048 pixels > MIN_IMAGE_PIXELS (1024), so the pixel-dimension
+     * guard in ImageHandler does not skip these images.
      */
     private void writeGradient(String name, boolean invertLastRow) throws IOException {
-        BufferedImage img = new BufferedImage(64, 8, BufferedImage.TYPE_INT_RGB);
-        for (int x = 0; x < 64; x++) {
-            int level = (int) (255.0 * x / 63);
+        BufferedImage img = new BufferedImage(256, 8, BufferedImage.TYPE_INT_RGB);
+        for (int x = 0; x < 256; x++) {
+            int level = x; // 0..255 black→white gradient
             for (int y = 0; y < 8; y++) {
                 int l = (invertLastRow && y == 7) ? (255 - level) : level;
                 img.setRGB(x, y, new Color(l, l, l).getRGB());
@@ -115,11 +119,11 @@ class NearDupImageE2ETest extends BaseTest {
         ImageIO.write(img, "png", out.toFile());
     }
 
-    /** White→black gradient: dHash ≈ all 0xFF — maximally different from black→white. */
+    /** White→black gradient: dHash ≈ all 0x00 — maximally different from black→white. */
     private void writeFullyInvertedGradient(String name) throws IOException {
-        BufferedImage img = new BufferedImage(64, 8, BufferedImage.TYPE_INT_RGB);
-        for (int x = 0; x < 64; x++) {
-            int level = 255 - (int) (255.0 * x / 63); // bright on left, dark on right
+        BufferedImage img = new BufferedImage(256, 8, BufferedImage.TYPE_INT_RGB);
+        for (int x = 0; x < 256; x++) {
+            int level = 255 - x; // bright on left, dark on right
             for (int y = 0; y < 8; y++) {
                 img.setRGB(x, y, new Color(level, level, level).getRGB());
             }
