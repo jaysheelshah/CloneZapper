@@ -12,6 +12,8 @@ import com.clonezapper.model.ScanRun;
 import com.vaadin.flow.component.UI;
 import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.button.ButtonVariant;
+import com.vaadin.flow.component.grid.Grid;
+import com.vaadin.flow.component.grid.GridVariant;
 import com.vaadin.flow.component.html.*;
 import com.vaadin.flow.component.orderedlayout.HorizontalLayout;
 import com.vaadin.flow.component.orderedlayout.VerticalLayout;
@@ -21,12 +23,17 @@ import com.vaadin.flow.theme.lumo.LumoUtility;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
 @Route(value = "", layout = MainLayout.class)
 @PageTitle("Dashboard — CloneZapper")
 public class DashboardView extends VerticalLayout {
+
+    private static final DateTimeFormatter DISPLAY_DT_FMT =
+        DateTimeFormatter.ofPattern("yyyy-MMM-dd HH:mm:ss");
 
     public DashboardView(ScanRepository scanRepository,
                          FileRepository fileRepository,
@@ -48,15 +55,26 @@ public class DashboardView extends VerticalLayout {
             long fileCount  = fileRepository.countByScanId(run.getId());
             long totalBytes = fileRepository.totalBytesByScanId(run.getId());
 
-            add(buildStatCard("Last Run", run.getRunLabel()));
-            add(buildStatCard("Phase", run.getPhase()));
-            add(buildStatCard("Files Indexed", String.format("%,d", fileCount)));
-            add(buildStatCard("Total Size", formatBytes(totalBytes)));
+            // ── Scan metadata table ───────────────────────────────────────────
+            List<StatRow> scanStats = new ArrayList<>();
+            scanStats.add(new StatRow("Scan ID", "#" + run.getId()));
             if (run.getCreatedAt() != null) {
-                add(buildStatCard("Started", run.getCreatedAt().toString()));
+                scanStats.add(new StatRow("Started", formatDateTime(run.getCreatedAt())));
             }
+            if (run.getCompletedAt() != null) {
+                scanStats.add(new StatRow("Completed", formatDateTime(run.getCompletedAt())));
+                if (run.getCreatedAt() != null) {
+                    Duration d = Duration.between(run.getCreatedAt(), run.getCompletedAt());
+                    scanStats.add(new StatRow("Duration", formatDuration(d)));
+                }
+            }
+            scanStats.add(new StatRow("Phase", run.getPhase()));
+            scanStats.add(new StatRow("Files Scanned", String.format("%,d", fileCount)));
+            scanStats.add(new StatRow("Total Size", formatBytes(totalBytes)));
 
-            // Duplicate statistics — only meaningful once clustering is done
+            add(buildStatsGrid(scanStats));
+
+            // ── Duplicate statistics — only meaningful once clustering is done ─
             List<DuplicateGroup> groups = groupRepository.findByScanId(run.getId());
             if (!groups.isEmpty()) {
                 add(new Hr());
@@ -75,9 +93,10 @@ public class DashboardView extends VerticalLayout {
                     }
                 }
 
-                add(buildStatCard("Duplicate Groups", String.valueOf(groups.size())));
-                add(buildStatCard("Files to Remove", String.valueOf(dupFileCount)));
-                add(buildStatCard("Recoverable Space", formatBytes(recoverableBytes)));
+                List<StatRow> dupStats = new ArrayList<>();
+                dupStats.add(new StatRow("Duplicate Groups", String.valueOf(groups.size())));
+                dupStats.add(new StatRow("Files to Remove", String.valueOf(dupFileCount)));
+                dupStats.add(new StatRow("Recoverable Space", formatBytes(recoverableBytes)));
 
                 // Action / staging statistics
                 List<Action> actions = actionRepository.findByScanId(run.getId());
@@ -85,12 +104,13 @@ public class DashboardView extends VerticalLayout {
                     .filter(a -> a.getActionType() == Action.Type.MOVE)
                     .count();
                 if (staged > 0) {
-                    add(new Hr());
-                    add(buildStatCard("Staged (moved)", staged + " file(s)"));
+                    dupStats.add(new StatRow("Staged (moved)", staged + " file(s)"));
                     if (run.getArchiveRoot() != null) {
-                        add(buildStatCard("Archive", run.getArchiveRoot()));
+                        dupStats.add(new StatRow("Archive", run.getArchiveRoot()));
                     }
                 }
+
+                add(buildStatsGrid(dupStats));
 
                 Button viewResults = new Button("View Results",
                     e -> UI.getCurrent().navigate(ResultsView.class));
@@ -108,16 +128,29 @@ public class DashboardView extends VerticalLayout {
         add(startScan);
     }
 
+    // ── Stats table ───────────────────────────────────────────────────────────
+
+    private Grid<StatRow> buildStatsGrid(List<StatRow> rows) {
+        Grid<StatRow> grid = new Grid<>();
+        grid.addColumn(StatRow::label)
+            .setHeader("")
+            .setWidth("180px").setFlexGrow(0)
+            .setClassNameGenerator(r -> "stat-label");
+        grid.addColumn(StatRow::value)
+            .setHeader("")
+            .setFlexGrow(1);
+        grid.setItems(rows);
+        grid.setAllRowsVisible(true);
+        grid.addThemeVariants(GridVariant.LUMO_COMPACT, GridVariant.LUMO_NO_BORDER);
+        grid.setWidthFull();
+        return grid;
+    }
+
     // ── Reconnect banner ──────────────────────────────────────────────────────
 
     /**
      * Returns a banner describing the state of an in-progress scan based on
      * how long ago the heartbeat was written.
-     * <p>
-     * Thresholds:
-     *   < 30 s   → scan is actively running (machine was sleeping, now awake)
-     *   30 s–5 m → probably resuming after sleep or a brief disruption
-     *   > 5 m    → scan appears interrupted (JVM likely crashed or killed)
      */
     private Div buildReconnectBanner(ScanRun run) {
         HeartbeatStatus status = evaluateHeartbeat(run.getLastHeartbeat());
@@ -166,6 +199,12 @@ public class DashboardView extends VerticalLayout {
 
     public enum HeartbeatStatus { RUNNING, RESUMING, INTERRUPTED, UNKNOWN }
 
+    // ── Formatting helpers ────────────────────────────────────────────────────
+
+    private static String formatDateTime(LocalDateTime dt) {
+        return dt.format(DISPLAY_DT_FMT);
+    }
+
     private static String formatAge(Duration d) {
         long s = d.toSeconds();
         if (s < 60)   return s + "s";
@@ -173,19 +212,21 @@ public class DashboardView extends VerticalLayout {
         return (s / 3600) + "h " + ((s % 3600) / 60) + "m";
     }
 
-    private HorizontalLayout buildStatCard(String label, String value) {
-        Span labelSpan = new Span(label + ": ");
-        labelSpan.addClassNames(LumoUtility.FontWeight.SEMIBOLD);
-        Span valueSpan = new Span(value);
-        HorizontalLayout card = new HorizontalLayout(labelSpan, valueSpan);
-        card.setSpacing(false);
-        return card;
+    private static String formatDuration(Duration d) {
+        long s = d.toSeconds();
+        if (s < 60)   return s + "s";
+        if (s < 3600) return (s / 60) + "m " + (s % 60) + "s";
+        return (s / 3600) + "h " + ((s % 3600) / 60) + "m " + (s % 60) + "s";
     }
 
-    private String formatBytes(long bytes) {
+    private static String formatBytes(long bytes) {
         if (bytes < 1024) return bytes + " B";
         if (bytes < 1024 * 1024) return String.format("%.1f KB", bytes / 1024.0);
         if (bytes < 1024 * 1024 * 1024) return String.format("%.1f MB", bytes / (1024.0 * 1024));
         return String.format("%.2f GB", bytes / (1024.0 * 1024 * 1024));
     }
+
+    // ── Data model ────────────────────────────────────────────────────────────
+
+    private record StatRow(String label, String value) {}
 }

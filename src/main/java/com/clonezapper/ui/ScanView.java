@@ -8,6 +8,8 @@ import com.vaadin.flow.component.DetachEvent;
 import com.vaadin.flow.component.UI;
 import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.button.ButtonVariant;
+import com.vaadin.flow.component.grid.Grid;
+import com.vaadin.flow.component.grid.GridVariant;
 import com.vaadin.flow.component.html.H2;
 import com.vaadin.flow.component.html.Paragraph;
 import com.vaadin.flow.component.html.Span;
@@ -15,9 +17,9 @@ import com.vaadin.flow.component.notification.Notification;
 import com.vaadin.flow.component.notification.NotificationVariant;
 import com.vaadin.flow.component.orderedlayout.HorizontalLayout;
 import com.vaadin.flow.component.orderedlayout.VerticalLayout;
-import com.vaadin.flow.component.progressbar.ProgressBar;
 import com.vaadin.flow.component.textfield.TextArea;
 import com.vaadin.flow.component.textfield.TextField;
+import com.vaadin.flow.data.renderer.LitRenderer;
 import com.vaadin.flow.router.PageTitle;
 import com.vaadin.flow.router.Route;
 import com.vaadin.flow.shared.Registration;
@@ -25,6 +27,12 @@ import org.springframework.beans.factory.annotation.Value;
 
 import javax.swing.JFileChooser;
 import javax.swing.UIManager;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -34,14 +42,20 @@ import java.util.function.Consumer;
 @PageTitle("Scan — CloneZapper")
 public class ScanView extends VerticalLayout {
 
-    private static final Map<String, Double> PHASE_PROGRESS = Map.of(
-        "SCANNING",   0.2,
-        "CANDIDATES", 0.4,
-        "COMPARING",  0.6,
-        "CLUSTERING", 0.8,
-        "COMPLETE",   1.0,
-        "FAILED",     0.0
+    /** Ordered pipeline stages shown in the progress table. */
+    private static final List<String> STAGE_ORDER =
+        List.of("SCANNING", "CANDIDATES", "COMPARING", "CLUSTERING", "COMPLETE");
+
+    private static final Map<String, String> STAGE_LABELS = Map.of(
+        "SCANNING",   "Index files",
+        "CANDIDATES", "Find candidates",
+        "COMPARING",  "Compare content",
+        "CLUSTERING", "Group duplicates",
+        "COMPLETE",   "Complete"
     );
+
+    private static final DateTimeFormatter TIME_FMT    = DateTimeFormatter.ofPattern("HH:mm:ss");
+    private static final DateTimeFormatter DISPLAY_FMT = DateTimeFormatter.ofPattern("yyyy-MMM-dd HH:mm:ss");
 
     // ── Spring-managed dependencies ───────────────────────────────────────────
     private final UnifiedScanner scanner;
@@ -52,9 +66,8 @@ public class ScanView extends VerticalLayout {
 
     // ── Progress section (shown while a scan runs) ────────────────────────────
     private final VerticalLayout progressSection;
-    private final ProgressBar progressBar = new ProgressBar();
-    private final Span phaseLabel = new Span();
-    private final Span fileCountLabel = new Span();
+    private final Span scanMetaLabel = new Span();
+    private final Grid<StageRow> stageGrid = new Grid<>();
 
     // ── Active poll registration (cleaned up on detach) ───────────────────────
     private Registration pollReg;
@@ -113,19 +126,15 @@ public class ScanView extends VerticalLayout {
             UI ui = UI.getCurrent();
             enterProgressMode(ui);
 
-            // onPhase callback gives fast progress bar updates from the scan thread
             Consumer<String> onPhase = phase -> {
-                double pct = PHASE_PROGRESS.getOrDefault(phase, 0.0);
-                ui.access(() -> {
-                    progressBar.setValue(pct);
-                    phaseLabel.setText(friendlyPhase(phase));
-                });
+                ui.access(() -> refreshProgress());
             };
 
             Thread scanThread = new Thread(() -> {
                 try {
                     ScanRun run = scanner.startScan(paths, archiveRoot, onPhase);
                     ui.access(() -> {
+                        refreshProgress();
                         exitProgressMode(ui);
                         pathsField.setEnabled(true);
                         archiveField.setEnabled(true);
@@ -161,16 +170,56 @@ public class ScanView extends VerticalLayout {
         formSection.setPadding(false);
 
         // ── Progress ──────────────────────────────────────────────────────────
-        progressBar.setWidthFull();
+        buildStageGrid();
+
+        scanMetaLabel.getStyle()
+            .set("font-size", "var(--lumo-font-size-s)")
+            .set("color", "var(--lumo-secondary-text-color)");
 
         progressSection = new VerticalLayout(
             new H2("Scan in progress"),
-            progressBar, phaseLabel, fileCountLabel);
+            scanMetaLabel,
+            stageGrid);
         progressSection.setSpacing(true);
         progressSection.setPadding(false);
         progressSection.setVisible(false);
 
         add(formSection, progressSection);
+    }
+
+    // ── Stage grid setup ──────────────────────────────────────────────────────
+
+    private void buildStageGrid() {
+        stageGrid.addColumn(StageRow::label)
+            .setHeader("Step")
+            .setWidth("160px").setFlexGrow(0);
+
+        stageGrid.addColumn(
+                LitRenderer.<StageRow>of("<span theme=\"badge ${item.theme}\">${item.status}</span>")
+                    .withProperty("status", StageRow::status)
+                    .withProperty("theme",  StageRow::statusTheme))
+            .setHeader("Status")
+            .setWidth("100px").setFlexGrow(0);
+
+        stageGrid.addColumn(StageRow::detail)
+            .setHeader("Details")
+            .setWidth("160px").setFlexGrow(0);
+
+        stageGrid.addColumn(StageRow::startedAt)
+            .setHeader("Start")
+            .setWidth("90px").setFlexGrow(0);
+
+        stageGrid.addColumn(StageRow::endedAt)
+            .setHeader("End")
+            .setWidth("90px").setFlexGrow(0);
+
+        stageGrid.addColumn(StageRow::elapsed)
+            .setHeader("Duration")
+            .setWidth("90px").setFlexGrow(0);
+
+        stageGrid.addThemeVariants(GridVariant.LUMO_COMPACT, GridVariant.LUMO_NO_BORDER);
+        stageGrid.setAllRowsVisible(true);
+        stageGrid.setWidthFull();
     }
 
     // ── Reconnect on navigate-back ────────────────────────────────────────────
@@ -200,7 +249,6 @@ public class ScanView extends VerticalLayout {
         pollReg = ui.addPollListener(e -> {
             refreshProgress();
             if (!progressTracker.isActive()) {
-                // Scan finished while the user was watching this reconnected view
                 exitProgressMode(ui);
                 String phase = progressTracker.getPhase();
                 if ("COMPLETE".equals(phase)) {
@@ -232,30 +280,81 @@ public class ScanView extends VerticalLayout {
     }
 
     private void refreshProgress() {
-        String phase = progressTracker.getPhase();
-        progressBar.setValue(PHASE_PROGRESS.getOrDefault(phase, 0.0));
-        phaseLabel.setText(friendlyPhase(phase));
-        if ("SCANNING".equals(phase)) {
-            fileCountLabel.setText(
-                String.format("%,d files found so far…", progressTracker.getFilesIndexed()));
-            fileCountLabel.setVisible(true);
-        } else {
-            fileCountLabel.setVisible(false);
+        String currentPhase = progressTracker.getPhase();
+        int currentIdx = STAGE_ORDER.indexOf(currentPhase);
+        if (currentIdx < 0) currentIdx = 0;
+
+        Instant scanStart = progressTracker.getScanStartTime();
+        Map<String, Instant> stageTimes = progressTracker.getStageStartTimes();
+
+        // Update scan-level metadata line
+        if (scanStart != null) {
+            String startStr = DISPLAY_FMT.format(LocalDateTime.ofInstant(scanStart, ZoneId.systemDefault()));
+            String elapsedStr = formatDuration(Duration.between(scanStart, Instant.now()));
+            scanMetaLabel.setText("Started: " + startStr + "   ·   Elapsed: " + elapsedStr);
         }
+
+        // Build one row per pipeline stage
+        List<StageRow> rows = new ArrayList<>();
+        for (int i = 0; i < STAGE_ORDER.size(); i++) {
+            String phaseKey = STAGE_ORDER.get(i);
+            String label = STAGE_LABELS.get(phaseKey);
+
+            String status, statusTheme;
+            if (i < currentIdx) {
+                status = "Done";    statusTheme = "success";
+            } else if (i == currentIdx) {
+                status = "Active";  statusTheme = "";
+            } else {
+                status = "Pending"; statusTheme = "contrast";
+            }
+
+            // Detail: file count while scanning or after scanning completes
+            String detail = "";
+            if ("SCANNING".equals(phaseKey) && i <= currentIdx) {
+                int count = progressTracker.getFilesIndexed();
+                if (count > 0) detail = String.format("%,d files", count);
+            }
+
+            // Start time of this stage
+            Instant stageStart = stageTimes.get(phaseKey);
+            String startedAt = stageStart != null ? formatTime(stageStart) : "—";
+
+            // End time = start time of the next stage (or "—" if not yet reached)
+            String endedAt = "—";
+            Instant stageEnd = null;
+            if (i + 1 < STAGE_ORDER.size()) {
+                stageEnd = stageTimes.get(STAGE_ORDER.get(i + 1));
+                if (stageEnd != null) endedAt = formatTime(stageEnd);
+            }
+
+            // Elapsed: for done stages use stage end; for active stage use now; pending = "—"
+            String elapsed = "—";
+            if (stageStart != null) {
+                if (i < currentIdx) {
+                    Instant end = stageEnd != null ? stageEnd : Instant.now();
+                    elapsed = formatDuration(Duration.between(stageStart, end));
+                } else if (i == currentIdx) {
+                    elapsed = formatDuration(Duration.between(stageStart, Instant.now()));
+                }
+            }
+
+            rows.add(new StageRow(label, phaseKey, status, statusTheme, detail, startedAt, endedAt, elapsed));
+        }
+        stageGrid.setItems(rows);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private static String friendlyPhase(String phase) {
-        return switch (phase) {
-            case "SCANNING"   -> "Indexing files…";
-            case "CANDIDATES" -> "Finding candidates…";
-            case "COMPARING"  -> "Comparing content…";
-            case "CLUSTERING" -> "Grouping duplicates…";
-            case "COMPLETE"   -> "Complete";
-            case "FAILED"     -> "Failed";
-            default           -> phase;
-        };
+    private static String formatTime(Instant instant) {
+        return TIME_FMT.format(LocalDateTime.ofInstant(instant, ZoneId.systemDefault()));
+    }
+
+    private static String formatDuration(Duration d) {
+        long s = d.toSeconds();
+        if (s < 60)   return s + "s";
+        if (s < 3600) return (s / 60) + "m " + (s % 60) + "s";
+        return (s / 3600) + "h " + ((s % 3600) / 60) + "m " + (s % 60) + "s";
     }
 
     /** Opens a folder picker and APPENDS the chosen path to a multi-line TextArea. */
@@ -291,4 +390,17 @@ public class ScanView extends VerticalLayout {
         picker.setName("clonezapper-folder-picker");
         picker.start();
     }
+
+    // ── Stage row model ───────────────────────────────────────────────────────
+
+    private record StageRow(
+        String label,
+        String phaseKey,
+        String status,
+        String statusTheme,
+        String detail,
+        String startedAt,
+        String endedAt,
+        String elapsed
+    ) {}
 }

@@ -13,6 +13,7 @@ import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.button.ButtonVariant;
 import com.vaadin.flow.component.confirmdialog.ConfirmDialog;
 import com.vaadin.flow.component.grid.Grid;
+import com.vaadin.flow.component.grid.GridVariant;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.vaadin.flow.component.html.Anchor;
@@ -127,44 +128,35 @@ public class ResultsView extends VerticalLayout implements BeforeEnterObserver {
         content.add(buildGroupGrid(groups));
     }
 
-    // ── Summary bar ───────────────────────────────────────────────────────────
+    // ── Summary table ─────────────────────────────────────────────────────────
+
+    private record SumRow(String label, String value) {}
 
     private Component buildSummaryBar(PreviewSummary summary) {
-        VerticalLayout bar = new VerticalLayout();
-        bar.setSpacing(false);
-        bar.setPadding(false);
-
-        // Row 1 — counts and recoverable space
-        HorizontalLayout row1 = new HorizontalLayout();
-        row1.setSpacing(true);
-        row1.add(
-            stat(String.format("%,d", summary.totalFilesScanned()), "files scanned"),
-            stat(String.valueOf(summary.totalGroups()), "duplicate groups"),
-            stat(formatBytes(summary.reclaimableBytes()), "recoverable"),
-            stat(String.format("%.0f%%", summary.avgConfidence() * 100), "avg confidence")
-        );
-
-        // Row 2 — queue breakdown and archive
-        HorizontalLayout row2 = new HorizontalLayout();
-        row2.setSpacing(true);
-        row2.add(
-            badge(summary.exactGroups() + " exact", "success"),
-            badge(summary.nearDupGroups() + " near-dup", "contrast"),
-            badge(summary.autoQueueCount() + " auto-queue", "success"),
-            badge(summary.reviewQueueCount() + " review", summary.reviewQueueCount() > 0 ? "error" : "contrast")
-        );
-
+        List<SumRow> rows = new ArrayList<>();
+        rows.add(new SumRow("Files scanned",    String.format("%,d", summary.totalFilesScanned())));
+        rows.add(new SumRow("Duplicate groups",
+            summary.totalGroups() + "  (" + summary.exactGroups() + " exact,  "
+            + summary.nearDupGroups() + " near-dup)"));
+        rows.add(new SumRow("Recoverable space", formatBytes(summary.reclaimableBytes())));
+        rows.add(new SumRow("Avg confidence",    String.format("%.0f%%", summary.avgConfidence() * 100)));
+        rows.add(new SumRow("Auto queue",        summary.autoQueueCount() + " group(s)"));
+        rows.add(new SumRow("Review queue",      summary.reviewQueueCount() + " group(s)"));
         if (!summary.archiveRoot().isBlank()) {
             String freeText = summary.archiveFreeBytes() >= 0
                 ? formatBytes(summary.archiveFreeBytes()) + " free"
                 : "unknown free space";
-            Span archiveInfo = new Span("Archive: " + summary.archiveRoot() + "  (" + freeText + ")");
-            archiveInfo.addClassNames(LumoUtility.TextColor.SECONDARY, LumoUtility.FontSize.SMALL);
-            row2.add(archiveInfo);
+            rows.add(new SumRow("Archive", summary.archiveRoot() + "  (" + freeText + ")"));
         }
 
-        bar.add(row1, row2);
-        return bar;
+        Grid<SumRow> grid = new Grid<>();
+        grid.addColumn(SumRow::label).setHeader("").setWidth("160px").setFlexGrow(0);
+        grid.addColumn(SumRow::value).setHeader("").setFlexGrow(1);
+        grid.setItems(rows);
+        grid.setAllRowsVisible(true);
+        grid.addThemeVariants(GridVariant.LUMO_COMPACT, GridVariant.LUMO_NO_BORDER);
+        grid.setWidthFull();
+        return grid;
     }
 
     // ── Action bar ────────────────────────────────────────────────────────────
@@ -309,8 +301,11 @@ public class ResultsView extends VerticalLayout implements BeforeEnterObserver {
         grid.addColumn(row -> formatBytes(row.reclaimableBytes()))
             .setHeader("Recoverable").setWidth("110px").setFlexGrow(0);
 
-        grid.addColumn(row -> truncatePath(row.canonicalPath()))
-            .setHeader("Keeper (canonical)").setFlexGrow(1);
+        grid.addColumn(LitRenderer.<GroupPreviewRow>of(
+                "<span title='${item.full}'>${item.short}</span>")
+                .withProperty("full",  row -> row.canonicalPath() != null ? row.canonicalPath() : "")
+                .withProperty("short", row -> truncatePath(row.canonicalPath())))
+            .setHeader("Keeper (canonical)").setFlexGrow(1).setResizable(true);
 
         // Expandable detail row — loads members lazily on first expand
         grid.setItemDetailsRenderer(new ComponentRenderer<>(this::buildMemberDetail));
@@ -337,7 +332,7 @@ public class ResultsView extends VerticalLayout implements BeforeEnterObserver {
         })).setHeader("Role").setWidth("100px").setFlexGrow(0);
 
         detail.addColumn(MemberPreviewRow::path)
-            .setHeader("Path").setFlexGrow(2);
+            .setHeader("Path").setWidth("400px").setFlexGrow(0).setResizable(true);
 
         detail.addColumn(m -> formatBytes(m.sizeBytes()))
             .setHeader("Size").setWidth("90px").setFlexGrow(0);
@@ -346,7 +341,7 @@ public class ResultsView extends VerticalLayout implements BeforeEnterObserver {
             .setHeader("Modified").setWidth("100px").setFlexGrow(0);
 
         detail.addColumn(m -> m.proposedArchivePath() != null ? m.proposedArchivePath() : "—")
-            .setHeader("Archive destination").setFlexGrow(3);
+            .setHeader("Archive destination").setWidth("400px").setFlexGrow(0).setResizable(true);
 
         detail.setItems(members);
         detail.setWidthFull();
@@ -359,23 +354,6 @@ public class ResultsView extends VerticalLayout implements BeforeEnterObserver {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
-
-    private Component stat(String value, String label) {
-        Span valueSpan = new Span(value);
-        valueSpan.addClassNames(LumoUtility.FontWeight.BOLD, LumoUtility.FontSize.LARGE);
-        Span labelSpan = new Span(" " + label);
-        labelSpan.addClassNames(LumoUtility.TextColor.SECONDARY, LumoUtility.FontSize.SMALL);
-        HorizontalLayout cell = new HorizontalLayout(valueSpan, labelSpan);
-        cell.setAlignItems(Alignment.BASELINE);
-        cell.setSpacing(false);
-        return cell;
-    }
-
-    private Span badge(String text, String variant) {
-        Span s = new Span(text);
-        s.getElement().getThemeList().add("badge " + variant);
-        return s;
-    }
 
     private String friendlyStrategy(String strategy) {
         return switch (strategy) {

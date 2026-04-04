@@ -62,7 +62,9 @@ public class SettingsView extends VerticalLayout {
             ok.open();
         });
 
-        add(new HorizontalLayout(thresholdField, saveThreshold));
+        HorizontalLayout thresholdRow = new HorizontalLayout(thresholdField, saveThreshold);
+        thresholdRow.setAlignItems(Alignment.END);
+        add(thresholdRow);
 
         // ── Read-only info ────────────────────────────────────────────────────
         add(new H3("Storage"));
