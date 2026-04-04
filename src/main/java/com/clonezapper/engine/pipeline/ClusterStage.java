@@ -32,6 +32,15 @@ public class ClusterStage {
     /** Confidence at or above which a group goes to the Auto Queue. */
     public static final double DEFAULT_CONFIDENCE_THRESHOLD = 0.95;
 
+    /**
+     * Maximum members a near-dup cluster may have before it is discarded.
+     * Clusters above this size are almost always template/boilerplate false positives
+     * (e.g. hundreds of HTML files from the same brokerage that share a common page
+     * template — MinHash sees high shingle overlap even though each file contains
+     * different trade data).  Exact-hash groups are not subject to this cap.
+     */
+    public static final int MAX_NEAR_DUP_CLUSTER_SIZE = 100;
+
     private final DuplicateGroupRepository groupRepository;
     private final FileRepository fileRepository;
     private final ScanSettings scanSettings;
@@ -112,6 +121,15 @@ public class ClusterStage {
                     });
                     if (cluster.size() < 2) continue;
                 }
+            }
+
+            // Discard near-dup clusters that grew too large — they are almost always
+            // template/boilerplate false positives where MinHash over-groups many files
+            // that share a common HTML or document template.
+            if (!strategy.startsWith("exact") && cluster.size() > MAX_NEAR_DUP_CLUSTER_SIZE) {
+                log.info("Stage ④ — discarding oversized near-dup cluster ({} members, strategy={})",
+                    cluster.size(), strategy);
+                continue;
             }
 
             // Confidence = minimum similarity across all retained pairs in this cluster.
