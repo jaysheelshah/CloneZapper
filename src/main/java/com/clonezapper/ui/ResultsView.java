@@ -217,7 +217,7 @@ public class ResultsView extends VerticalLayout implements BeforeEnterObserver {
             });
         Anchor downloadAnchor = new Anchor(jsonResource, "");
         downloadAnchor.getElement().setAttribute("download", true);
-        downloadAnchor.setVisible(false);
+        downloadAnchor.getStyle().set("display", "none");
 
         Button downloadButton = new Button("Download JSON");
         downloadButton.addClickListener(e ->

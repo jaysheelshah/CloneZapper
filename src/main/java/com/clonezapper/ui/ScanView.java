@@ -52,9 +52,9 @@ public class ScanView extends VerticalLayout {
 
     // ── Progress section (shown while a scan runs) ────────────────────────────
     private final VerticalLayout progressSection;
-    private final ProgressBar progressBar;
-    private final Span phaseLabel;
-    private final Span fileCountLabel;
+    private final ProgressBar progressBar = new ProgressBar();
+    private final Span phaseLabel = new Span();
+    private final Span fileCountLabel = new Span();
 
     // ── Active poll registration (cleaned up on detach) ───────────────────────
     private Registration pollReg;
@@ -161,10 +161,7 @@ public class ScanView extends VerticalLayout {
         formSection.setPadding(false);
 
         // ── Progress ──────────────────────────────────────────────────────────
-        progressBar   = new ProgressBar();
         progressBar.setWidthFull();
-        phaseLabel    = new Span();
-        fileCountLabel = new Span();
 
         progressSection = new VerticalLayout(
             new H2("Scan in progress"),

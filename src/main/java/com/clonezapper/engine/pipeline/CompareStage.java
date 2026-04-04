@@ -38,6 +38,13 @@ public class CompareStage {
     /** Minimum similarity for a near-dup pair to be emitted. */
     public static final double MIN_NEAR_DUP_SIMILARITY = 0.5;
 
+    /**
+     * Minimum size ratio for near-dup candidates: smaller/larger must be >= this value.
+     * Prevents files of wildly different sizes from being grouped as near-duplicates.
+     * E.g. 0.5 means a 100 KB file will only be compared against files between 50 KB–200 KB.
+     */
+    public static final double MIN_SIZE_RATIO = 0.5;
+
     private final FileRepository fileRepository;
     private final HashService hashService;
     private final HandlerRegistry handlerRegistry;
@@ -122,6 +129,7 @@ public class CompareStage {
 
             // Compute fingerprints — reuse cached minhash_signature when available
             Map<Long, byte[]> fingerprints = new LinkedHashMap<>();
+            Map<Long, Long>   fileSizes    = new LinkedHashMap<>();
             for (ScannedFile file : files) {
                 try {
                     byte[] fp = file.getMinhashSignature();
@@ -131,7 +139,10 @@ public class CompareStage {
                             fileRepository.updateMinhashSignature(file.getId(), fp);
                         }
                     }
-                    if (fp.length > 0) fingerprints.put(file.getId(), fp);
+                    if (fp.length > 0) {
+                        fingerprints.put(file.getId(), fp);
+                        fileSizes.put(file.getId(), file.getSize());
+                    }
                 } catch (IOException e) {
                     log.warn("Stage ③ near-dup — could not fingerprint {}: {}",
                         file.getPath(), e.getMessage());
@@ -144,6 +155,16 @@ public class CompareStage {
                 for (int j = i + 1; j < ids.size(); j++) {
                     long idA = ids.get(i);
                     long idB = ids.get(j);
+
+                    // Skip pairs whose sizes differ by more than MIN_SIZE_RATIO.
+                    // Files of very different sizes are not near-duplicates.
+                    long sA = fileSizes.get(idA);
+                    long sB = fileSizes.get(idB);
+                    if (sA > 0 && sB > 0) {
+                        double sizeRatio = (double) Math.min(sA, sB) / Math.max(sA, sB);
+                        if (sizeRatio < MIN_SIZE_RATIO) continue;
+                    }
+
                     double sim = handler.computeSimilarity(
                         fingerprints.get(idA), fingerprints.get(idB));
                     if (sim >= MIN_NEAR_DUP_SIMILARITY && sim < 1.0) {

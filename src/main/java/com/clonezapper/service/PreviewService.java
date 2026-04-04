@@ -61,16 +61,20 @@ public class PreviewService {
             "FROM duplicate_groups WHERE scan_id = ?",
             threshold, threshold, scanId);
 
+        // Use DISTINCT file_id to avoid double-counting files that appear as non-canonical
+        // in both an exact group and a near-dup group.
         long reclaimable = queryLong(
-            "SELECT COALESCE(SUM(f.size), 0) " +
-            "FROM duplicate_members dm " +
-            "JOIN duplicate_groups dg ON dm.group_id = dg.id " +
-            "JOIN files f ON dm.file_id = f.id " +
-            "WHERE dg.scan_id = ? AND dm.file_id != dg.canonical_file_id",
+            "SELECT COALESCE(SUM(size), 0) FROM (" +
+            "  SELECT DISTINCT f.id, f.size" +
+            "  FROM duplicate_members dm" +
+            "  JOIN duplicate_groups dg ON dm.group_id = dg.id" +
+            "  JOIN files f ON dm.file_id = f.id" +
+            "  WHERE dg.scan_id = ? AND dm.file_id != dg.canonical_file_id" +
+            ")",
             scanId);
 
         long totalDupes = queryLong(
-            "SELECT COUNT(*) " +
+            "SELECT COUNT(DISTINCT dm.file_id) " +
             "FROM duplicate_members dm " +
             "JOIN duplicate_groups dg ON dm.group_id = dg.id " +
             "WHERE dg.scan_id = ? AND dm.file_id != dg.canonical_file_id",

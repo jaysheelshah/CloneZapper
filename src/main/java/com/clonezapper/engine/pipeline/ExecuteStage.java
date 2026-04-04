@@ -276,11 +276,17 @@ public class ExecuteStage {
         // ── HTML ──────────────────────────────────────────────────────────────
         try {
             long staged = actions.stream().filter(a -> a.getActionType() == Action.Type.MOVE).count();
+            // Collect distinct non-canonical file IDs to avoid double-counting files that
+            // appear as non-canonical in both an exact group and a near-dup group.
             long recoverableBytes = groups.stream()
                 .flatMap(g -> g.getMembers().stream()
                     .filter(m -> !m.getFileId().equals(g.getCanonicalFileId()))
-                    .flatMap(m -> files.stream().filter(f -> f.getId().equals(m.getFileId()))))
-                .mapToLong(ScannedFile::getSize).sum();
+                    .map(DuplicateMember::getFileId))
+                .distinct()
+                .mapToLong(fid -> files.stream()
+                    .filter(f -> f.getId().equals(fid))
+                    .mapToLong(ScannedFile::getSize).findFirst().orElse(0L))
+                .sum();
 
             StringBuilder html = new StringBuilder();
             html.append("<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\">")
