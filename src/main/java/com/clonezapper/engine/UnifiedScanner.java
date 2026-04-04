@@ -1,5 +1,6 @@
 package com.clonezapper.engine;
 
+import com.clonezapper.db.FileRepository;
 import com.clonezapper.db.ScanRepository;
 import com.clonezapper.engine.pipeline.CandidateStage;
 import com.clonezapper.engine.pipeline.ClusterStage;
@@ -16,6 +17,8 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -41,6 +44,7 @@ public class UnifiedScanner {
     private static final DateTimeFormatter RUN_LABEL_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss");
 
     private final ScanRepository scanRepository;
+    private final FileRepository fileRepository;
     private final ScanStage scanStage;
     private final CandidateStage candidateStage;
     private final CompareStage compareStage;
@@ -49,6 +53,7 @@ public class UnifiedScanner {
     private final String defaultArchiveRoot;
 
     public UnifiedScanner(ScanRepository scanRepository,
+                          FileRepository fileRepository,
                           ScanStage scanStage,
                           CandidateStage candidateStage,
                           CompareStage compareStage,
@@ -56,6 +61,7 @@ public class UnifiedScanner {
                           ScanProgressTracker progressTracker,
                           @Value("${clonezapper.archive.root}") String defaultArchiveRoot) {
         this.scanRepository = scanRepository;
+        this.fileRepository = fileRepository;
         this.scanStage = scanStage;
         this.candidateStage = candidateStage;
         this.compareStage = compareStage;
@@ -91,6 +97,27 @@ public class UnifiedScanner {
         run.setRunLabel("run_" + LocalDateTime.now().format(RUN_LABEL_FORMAT));
         run.setArchiveRoot(archiveRoot);
         scanRepository.save(run);
+
+        // ── Skip-if-unchanged check ───────────────────────────────────────────
+        // Take a cheap filesystem snapshot (no hashes, no DB writes) and compare
+        // it to the previous completed scan.  If nothing changed, discard the
+        // stub ScanRun and return the previous result immediately.
+        Optional<ScanRun> prevComplete = scanRepository.findLatestComplete();
+        if (prevComplete.isPresent()) {
+            log.info("Quick snapshot — checking for changes since scan {}", prevComplete.get().getId());
+            Map<String, String> currentSnapshot  = scanStage.quickSnapshot(rootPaths, Set.of(archiveRoot));
+            Map<String, String> previousSnapshot = fileRepository.loadSnapshotByScanId(prevComplete.get().getId());
+            if (currentSnapshot.equals(previousSnapshot)) {
+                log.info("No changes detected — skipping full pipeline, reusing scan {}", prevComplete.get().getId());
+                scanRepository.deleteById(run.getId());
+                progressTracker.start(run.getId());
+                progressTracker.complete();
+                onPhase.accept("COMPLETE");
+                return prevComplete.get();
+            }
+            log.info("Changes detected ({} → {} files) — running full pipeline",
+                previousSnapshot.size(), currentSnapshot.size());
+        }
 
         log.info("Starting scan run {} over {} path(s)", run.getId(), rootPaths.size());
         progressTracker.start(run.getId());

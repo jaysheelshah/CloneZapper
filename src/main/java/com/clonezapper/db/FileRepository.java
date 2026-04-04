@@ -7,9 +7,14 @@ import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Repository;
 
+import org.springframework.jdbc.core.BatchPreparedStatementSetter;
+
 import java.sql.PreparedStatement;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -80,6 +85,78 @@ public class FileRepository {
             "SELECT * FROM files WHERE path = ? ORDER BY id DESC LIMIT 1",
             rowMapper(), path);
         return results.isEmpty() ? Optional.empty() : Optional.of(results.getFirst());
+    }
+
+    /**
+     * Bulk-load the most recent fingerprint record for every known path — one query
+     * instead of N per-file round-trips.  Used by ScanStage as an in-memory cache that
+     * replaces per-file {@link #findLatestByPath} calls.
+     * Only paths that already have a partial hash are included (files that were fully
+     * processed in a previous scan).
+     */
+    public Map<String, ScannedFile> loadLatestByPath() {
+        List<ScannedFile> records = jdbc.query(
+            "SELECT f.* FROM files f " +
+            "JOIN (SELECT path, MAX(id) AS max_id FROM files GROUP BY path) latest " +
+            "ON f.id = latest.max_id " +
+            "WHERE f.hash_partial IS NOT NULL",
+            rowMapper());
+        Map<String, ScannedFile> map = new HashMap<>(records.size() * 2);
+        for (ScannedFile f : records) map.put(f.getPath(), f);
+        return map;
+    }
+
+    /**
+     * Batch-insert a list of file records in a single JDBC batch (one SQLite transaction).
+     * Much faster than N individual {@link #save} calls for large scans.
+     * Generated IDs are not set on the returned objects — callers that need IDs
+     * should query by scan_id after this call.
+     */
+    public void saveBatch(List<ScannedFile> files) {
+        if (files.isEmpty()) return;
+        jdbc.batchUpdate(
+            "INSERT INTO files (scan_id, path, provider, size, modified_at, mime_type, " +
+            "hash_partial, hash_full, minhash_signature, copy_hint) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            new BatchPreparedStatementSetter() {
+                @Override
+                public void setValues(PreparedStatement ps, int i) throws SQLException {
+                    ScannedFile f = files.get(i);
+                    ps.setLong(1, f.getScanId());
+                    ps.setString(2, f.getPath());
+                    ps.setString(3, f.getProvider());
+                    ps.setLong(4, f.getSize());
+                    ps.setString(5, f.getModifiedAt() != null ? f.getModifiedAt().toString() : null);
+                    ps.setString(6, f.getMimeType());
+                    ps.setString(7, f.getHashPartial());
+                    ps.setString(8, f.getHashFull());
+                    ps.setBytes(9, f.getMinhashSignature());
+                    ps.setString(10, f.getCopyHint());
+                }
+                @Override
+                public int getBatchSize() { return files.size(); }
+            });
+    }
+
+    /**
+     * Load a lightweight {@code path → "size|modifiedAt"} snapshot for all files in a scan.
+     * Used by {@link com.clonezapper.engine.UnifiedScanner} to quickly detect whether
+     * anything changed since the previous scan, without loading full fingerprint data.
+     */
+    public Map<String, String> loadSnapshotByScanId(long scanId) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT path, size, modified_at FROM files WHERE scan_id = ?", scanId);
+        Map<String, String> snapshot = new HashMap<>(rows.size() * 2);
+        for (Map<String, Object> row : rows) {
+            String path   = (String) row.get("path");
+            long   size   = ((Number) row.get("size")).longValue();
+            String modRaw = (String) row.get("modified_at");
+            String mod    = modRaw != null
+                ? LocalDateTime.parse(modRaw).truncatedTo(ChronoUnit.SECONDS).toString()
+                : "";
+            snapshot.put(path, size + "|" + mod);
+        }
+        return snapshot;
     }
 
     public void updateHashFull(long id, String hashFull) {

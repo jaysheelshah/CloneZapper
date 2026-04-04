@@ -106,6 +106,19 @@ public class ScanRepository {
         return results.isEmpty() ? Optional.empty() : Optional.of(results.getFirst());
     }
 
+    /** Most recently completed scan — used to detect unchanged re-scans. */
+    public Optional<ScanRun> findLatestComplete() {
+        List<ScanRun> results = jdbc.query(
+            "SELECT * FROM scans WHERE phase = 'COMPLETE' ORDER BY created_at DESC LIMIT 1",
+            rowMapper());
+        return results.isEmpty() ? Optional.empty() : Optional.of(results.getFirst());
+    }
+
+    /** Delete a scan stub that was created but abandoned (e.g. unchanged re-scan). */
+    public void deleteById(long id) {
+        jdbc.update("DELETE FROM scans WHERE id = ?", id);
+    }
+
     public long countAll() {
         Long count = jdbc.queryForObject("SELECT COUNT(*) FROM scans", Long.class);
         return count != null ? count : 0L;

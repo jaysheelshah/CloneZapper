@@ -101,15 +101,25 @@ public class ClusterStage {
                 fileRepository.findById(id).ifPresent(f -> fileMap.put(id, f));
             }
 
-            // For near-dup clusters, remove members whose size deviates too much from
-            // the canonical. The pairwise size filter in CompareStage prevents direct
-            // comparison of differently-sized files, but Union-Find transitivity can still
-            // chain them (A≈B, B≈C → A and C in same cluster even if size(A)/size(C) << 0.5).
+            // For near-dup clusters, prune members by size in two passes:
+            //
+            // Pass 1 — canonical-relative: remove any member whose size ratio vs the
+            //   canonical falls below MIN_SIZE_RATIO (0.5). This handles transitive
+            //   chains where A≈B, B≈C but size(A)/size(C) << 0.5.
+            //
+            // Pass 2 — all-pairs: canonical-relative pruning guarantees each member is
+            //   within 2x of the canonical, but two extreme members can still be up to
+            //   4x apart (e.g. canonical=200KB, memberA=101KB, memberB=399KB →
+            //   101/399 ≈ 0.25 < 0.5). Iteratively remove the non-canonical member
+            //   furthest from the canonical (in log-size space) until every pair in
+            //   the cluster satisfies min/max ≥ MIN_SIZE_RATIO.
             if (!strategy.startsWith("exact")) {
                 Long canonicalId = selectCanonical(fileMap, cluster);
                 ScannedFile canonical = fileMap.get(canonicalId);
                 if (canonical != null && canonical.getSize() > 0) {
                     final long cSize = canonical.getSize();
+
+                    // Pass 1: canonical-relative
                     cluster.removeIf(id -> {
                         if (id.equals(canonicalId)) return false;
                         ScannedFile f = fileMap.get(id);
@@ -119,6 +129,32 @@ public class ClusterStage {
                         double ratio = (double) Math.min(cSize, sz) / Math.max(cSize, sz);
                         return ratio < CompareStage.MIN_SIZE_RATIO;
                     });
+                    if (cluster.size() < 2) continue;
+
+                    // Pass 2: all-pairs — trim until max/min >= MIN_SIZE_RATIO
+                    final double logCanon = Math.log(cSize);
+                    boolean trimmed = true;
+                    while (trimmed && cluster.size() >= 2) {
+                        trimmed = false;
+                        long minSz = cluster.stream().map(fileMap::get)
+                            .filter(f -> f != null && f.getSize() > 0)
+                            .mapToLong(ScannedFile::getSize).min().orElse(0);
+                        long maxSz = cluster.stream().map(fileMap::get)
+                            .filter(f -> f != null && f.getSize() > 0)
+                            .mapToLong(ScannedFile::getSize).max().orElse(0);
+                        if (minSz <= 0 || maxSz <= 0) break;
+                        if ((double) minSz / maxSz >= CompareStage.MIN_SIZE_RATIO) break;
+                        Long worstId = cluster.stream()
+                            .filter(id -> !id.equals(canonicalId))
+                            .filter(id -> fileMap.get(id) != null && fileMap.get(id).getSize() > 0)
+                            .max(Comparator.comparingDouble(id ->
+                                Math.abs(Math.log(fileMap.get(id).getSize()) - logCanon)))
+                            .orElse(null);
+                        if (worstId != null) {
+                            cluster.remove(worstId);
+                            trimmed = true;
+                        }
+                    }
                     if (cluster.size() < 2) continue;
                 }
             }
