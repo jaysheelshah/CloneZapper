@@ -39,7 +39,9 @@ import org.springframework.beans.factory.annotation.Value;
 
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -114,7 +116,7 @@ public class ResultsView extends VerticalLayout implements BeforeEnterObserver {
         PreviewSummary summary = previewService.buildSummary(run.getId());
         List<GroupPreviewRow> groups = previewService.buildGroups(run.getId());
 
-        content.add(buildSummaryBar(summary));
+        content.add(buildSummaryBar(run, summary));
 
         if (groups.isEmpty()) {
             Paragraph none = new Paragraph("No duplicate groups found in this scan.");
@@ -130,10 +132,24 @@ public class ResultsView extends VerticalLayout implements BeforeEnterObserver {
 
     // ── Summary table ─────────────────────────────────────────────────────────
 
+    private static final DateTimeFormatter DT_FMT =
+        DateTimeFormatter.ofPattern("yyyy-MMM-dd HH:mm:ss");
+
     private record SumRow(String label, String value) {}
 
-    private Component buildSummaryBar(PreviewSummary summary) {
+    private Component buildSummaryBar(ScanRun run, PreviewSummary summary) {
         List<SumRow> rows = new ArrayList<>();
+
+        if (run.getCreatedAt() != null)
+            rows.add(new SumRow("Started",  run.getCreatedAt().format(DT_FMT)));
+        if (run.getCompletedAt() != null) {
+            rows.add(new SumRow("Completed", run.getCompletedAt().format(DT_FMT)));
+            if (run.getCreatedAt() != null) {
+                Duration d = Duration.between(run.getCreatedAt(), run.getCompletedAt());
+                rows.add(new SumRow("Duration", formatDuration(d)));
+            }
+        }
+
         rows.add(new SumRow("Files scanned",    String.format("%,d", summary.totalFilesScanned())));
         rows.add(new SumRow("Duplicate groups",
             summary.totalGroups() + "  (" + summary.exactGroups() + " exact,  "
@@ -344,10 +360,16 @@ public class ResultsView extends VerticalLayout implements BeforeEnterObserver {
             .setHeader("Archive destination").setWidth("400px").setFlexGrow(0).setResizable(true);
 
         detail.setItems(members);
-        detail.setWidthFull();
+        detail.setWidth("1100px");   // wider than viewport → grid scrolls horizontally
         detail.setHeight("280px");
 
-        VerticalLayout wrapper = new VerticalLayout(detail);
+        // Wrap in an overflow-x: auto container so the grid scrolls horizontally
+        // rather than compressing the fixed-width Path / Archive destination columns.
+        com.vaadin.flow.component.html.Div scrollBox = new com.vaadin.flow.component.html.Div(detail);
+        scrollBox.getStyle().set("overflow-x", "auto");
+        scrollBox.setWidthFull();
+
+        VerticalLayout wrapper = new VerticalLayout(scrollBox);
         wrapper.setPadding(false);
         wrapper.setSpacing(false);
         return wrapper;
@@ -370,6 +392,15 @@ public class ResultsView extends VerticalLayout implements BeforeEnterObserver {
         String[] parts = path.replace('\\', '/').split("/");
         if (parts.length <= 3) return path;
         return "…/" + parts[parts.length - 2] + "/" + parts[parts.length - 1];
+    }
+
+    private String formatDuration(Duration d) {
+        long h = d.toHours();
+        long m = d.toMinutesPart();
+        long s = d.toSecondsPart();
+        if (h > 0)  return String.format("%dh %02dm %02ds", h, m, s);
+        if (m > 0)  return String.format("%dm %02ds", m, s);
+        return s + "s";
     }
 
     private String formatBytes(long bytes) {

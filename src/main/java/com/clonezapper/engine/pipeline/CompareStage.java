@@ -6,6 +6,7 @@ import com.clonezapper.handler.GenericHandler;
 import com.clonezapper.handler.HandlerRegistry;
 import com.clonezapper.model.ScannedFile;
 import com.clonezapper.service.HashService;
+import com.clonezapper.service.ScanSettings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -49,13 +50,16 @@ public class CompareStage {
     private final FileRepository fileRepository;
     private final HashService hashService;
     private final HandlerRegistry handlerRegistry;
+    private final ScanSettings scanSettings;
 
     public CompareStage(FileRepository fileRepository,
                         HashService hashService,
-                        HandlerRegistry handlerRegistry) {
+                        HandlerRegistry handlerRegistry,
+                        ScanSettings scanSettings) {
         this.fileRepository = fileRepository;
         this.hashService = hashService;
         this.handlerRegistry = handlerRegistry;
+        this.scanSettings = scanSettings;
     }
 
     /**
@@ -168,7 +172,7 @@ public class CompareStage {
 
                     double sim = handler.computeSimilarity(
                         fingerprints.get(idA), fingerprints.get(idB));
-                    if (sim >= MIN_NEAR_DUP_SIMILARITY && sim < 1.0) {
+                    if (sim >= scanSettings.getMinNearDupSimilarity() && sim < 1.0) {
                         String strategy = mimeType.startsWith("image/")
                             ? "near-dup-image" : "near-dup-document";
                         pairs.add(new ScoredPair(idA, idB, sim, strategy));

@@ -9,6 +9,7 @@ import com.clonezapper.engine.pipeline.ScanStage;
 import com.clonezapper.model.ScanRun;
 import com.clonezapper.model.ScannedFile;
 import com.clonezapper.service.ScanProgressTracker;
+import com.clonezapper.service.ScanSettings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -50,6 +51,7 @@ public class UnifiedScanner {
     private final CompareStage compareStage;
     private final ClusterStage clusterStage;
     private final ScanProgressTracker progressTracker;
+    private final ScanSettings scanSettings;
     private final String defaultArchiveRoot;
 
     public UnifiedScanner(ScanRepository scanRepository,
@@ -59,6 +61,7 @@ public class UnifiedScanner {
                           CompareStage compareStage,
                           ClusterStage clusterStage,
                           ScanProgressTracker progressTracker,
+                          ScanSettings scanSettings,
                           @Value("${clonezapper.archive.root}") String defaultArchiveRoot) {
         this.scanRepository = scanRepository;
         this.fileRepository = fileRepository;
@@ -67,6 +70,7 @@ public class UnifiedScanner {
         this.compareStage = compareStage;
         this.clusterStage = clusterStage;
         this.progressTracker = progressTracker;
+        this.scanSettings = scanSettings;
         this.defaultArchiveRoot = defaultArchiveRoot;
     }
 
@@ -107,10 +111,14 @@ public class UnifiedScanner {
             log.info("Quick snapshot — checking for changes since scan {}", prevComplete.get().getId());
             Map<String, String> currentSnapshot  = scanStage.quickSnapshot(rootPaths, Set.of(archiveRoot));
             Map<String, String> previousSnapshot = fileRepository.loadSnapshotByScanId(prevComplete.get().getId());
-            if (currentSnapshot.equals(previousSnapshot)) {
+            String currentSettingsHash  = scanSettings.getConfidenceThreshold() + "|" + scanSettings.getMinNearDupSimilarity();
+            String previousSettingsHash = prevComplete.get().getSettingsHash();
+            if (currentSnapshot.equals(previousSnapshot) && currentSettingsHash.equals(previousSettingsHash)) {
                 log.info("No changes detected — skipping full pipeline, reusing scan {}", prevComplete.get().getId());
                 scanRepository.deleteById(run.getId());
-                progressTracker.start(run.getId());
+                // Start the tracker with the *previous* scan's ID so the UI resolves
+                // results against the correct scan, not the deleted stub.
+                progressTracker.start(prevComplete.get().getId());
                 progressTracker.complete();
                 onPhase.accept("COMPLETE");
                 return prevComplete.get();
@@ -164,6 +172,8 @@ public class UnifiedScanner {
                     nearDupResult.autoQueue().size(), nearDupResult.reviewQueue().size());
 
                 scanRepository.markCompleted(run.getId());
+                scanRepository.updateSettingsHash(run.getId(),
+                    scanSettings.getConfidenceThreshold() + "|" + scanSettings.getMinNearDupSimilarity());
                 progressTracker.complete();
                 phase(run.getId(), "COMPLETE", onPhase);
 

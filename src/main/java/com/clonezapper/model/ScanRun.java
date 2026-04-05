@@ -13,6 +13,7 @@ public class ScanRun {
     private String archiveRoot;
     private String runLabel;
     private LocalDateTime lastHeartbeat;
+    private String settingsHash;
 
     public ScanRun() {}
 
@@ -42,6 +43,9 @@ public class ScanRun {
 
     public LocalDateTime getLastHeartbeat() { return lastHeartbeat; }
     public void setLastHeartbeat(LocalDateTime lastHeartbeat) { this.lastHeartbeat = lastHeartbeat; }
+
+    public String getSettingsHash() { return settingsHash; }
+    public void setSettingsHash(String settingsHash) { this.settingsHash = settingsHash; }
 
     @Override
     public String toString() {

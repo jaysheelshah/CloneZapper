@@ -36,6 +36,11 @@ public class ScanRepository {
         } catch (Exception ignored) {
             // Column already exists — safe to ignore
         }
+        try {
+            jdbc.execute("ALTER TABLE scans ADD COLUMN settings_hash TEXT");
+        } catch (Exception ignored) {
+            // Column already exists — safe to ignore
+        }
     }
 
     public ScanRun save(ScanRun run) {
@@ -114,6 +119,11 @@ public class ScanRepository {
         return results.isEmpty() ? Optional.empty() : Optional.of(results.getFirst());
     }
 
+    /** Stores the settings fingerprint used during this scan (for cache invalidation). */
+    public void updateSettingsHash(long id, String settingsHash) {
+        jdbc.update("UPDATE scans SET settings_hash = ? WHERE id = ?", settingsHash, id);
+    }
+
     /** Delete a scan stub that was created but abandoned (e.g. unchanged re-scan). */
     public void deleteById(long id) {
         jdbc.update("DELETE FROM scans WHERE id = ?", id);
@@ -139,6 +149,7 @@ public class ScanRepository {
             run.setRunLabel(rs.getString("run_label"));
             String lastHeartbeat = rs.getString("last_heartbeat");
             if (lastHeartbeat != null) run.setLastHeartbeat(LocalDateTime.parse(lastHeartbeat));
+            run.setSettingsHash(rs.getString("settings_hash"));
             return run;
         };
     }
